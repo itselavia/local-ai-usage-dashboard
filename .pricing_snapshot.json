@@ -1,0 +1,55 @@
+{
+  "providers": {
+    "openai": {
+      "fetched_at": "2026-03-21 15:46:46 PDT",
+      "models": {
+        "gpt-5.1-codex-max": {
+          "cached_input_per_million": 0.125,
+          "input_per_million": 1.25,
+          "long_cached_input_per_million": null,
+          "long_input_per_million": null,
+          "long_output_per_million": null,
+          "output_per_million": 10.0,
+          "source_url": "https://developers.openai.com/api/docs/models/gpt-5.1-codex-max"
+        },
+        "gpt-5.1-codex-mini": {
+          "cached_input_per_million": 0.025,
+          "input_per_million": 0.25,
+          "long_cached_input_per_million": null,
+          "long_input_per_million": null,
+          "long_output_per_million": null,
+          "output_per_million": 2.0,
+          "source_url": "https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini"
+        },
+        "gpt-5.2-codex": {
+          "cached_input_per_million": 0.175,
+          "input_per_million": 1.75,
+          "long_cached_input_per_million": null,
+          "long_input_per_million": null,
+          "long_output_per_million": null,
+          "output_per_million": 14.0,
+          "source_url": "https://developers.openai.com/api/docs/models/gpt-5.2-codex"
+        },
+        "gpt-5.3-codex": {
+          "cached_input_per_million": 0.175,
+          "input_per_million": 1.75,
+          "long_cached_input_per_million": null,
+          "long_input_per_million": null,
+          "long_output_per_million": null,
+          "output_per_million": 14.0,
+          "source_url": "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+        },
+        "gpt-5.4": {
+          "cached_input_per_million": 0.25,
+          "input_per_million": 2.5,
+          "long_cached_input_per_million": 0.5,
+          "long_input_per_million": 5.0,
+          "long_output_per_million": 22.5,
+          "output_per_million": 15.0,
+          "source_url": "https://developers.openai.com/api/docs/models/gpt-5.4"
+        }
+      },
+      "source_url": "https://developers.openai.com/api/docs/pricing"
+    }
+  }
+}
