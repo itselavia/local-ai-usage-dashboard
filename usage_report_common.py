@@ -85,6 +85,7 @@ class ClaudeSessionRecord:
     cache_read_input_tokens: int
     cache_creation_ephemeral_5m_input_tokens: int
     cache_creation_ephemeral_1h_input_tokens: int
+    has_enriched_tokens: bool
 
     @property
     def local_day(self):

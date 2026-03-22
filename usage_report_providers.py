@@ -89,7 +89,14 @@ def read_openai_session(path: Path, report_tz: tzinfo) -> SessionRecord | None:
                 info = payload.get("info") or {}
                 usage = info.get("total_token_usage") or info.get("last_token_usage")
                 if usage:
-                    final_usage = usage
+                    # Pick the event with the highest (input + output) sum rather than
+                    # blindly taking the last event. Corrupt final events can zero out
+                    # input/output while leaving a stale total_tokens value (observed in
+                    # sessions that were interrupted and then resumed from a prior total).
+                    candidate_sum = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+                    current_sum = int((final_usage or {}).get("input_tokens", 0)) + int((final_usage or {}).get("output_tokens", 0))
+                    if candidate_sum >= current_sum:
+                        final_usage = usage
 
     if meta is None:
         return None
@@ -107,12 +114,10 @@ def read_openai_session(path: Path, report_tz: tzinfo) -> SessionRecord | None:
     if first_ts is not None and last_ts is not None:
         duration_s = (last_ts - first_ts).total_seconds()
 
-    total_tokens = int(
-        usage.get("total_tokens")
-        or (usage.get("input_tokens") or 0)
-        + (usage.get("output_tokens") or 0)
-        + (usage.get("reasoning_output_tokens") or 0)
-    )
+    # Always derive total from input + output. The total_tokens field in the log
+    # can carry a stale offset when a session is resumed after an interrupted one
+    # (the prior session's final total bleeds into the continuation's running sum).
+    total_tokens = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
 
     return SessionRecord(
         path=path,
@@ -688,10 +693,15 @@ def read_claude_session_enrichment(path: Path | None) -> dict:
         "cache_read_input_tokens": 0,
         "cache_creation_ephemeral_5m_input_tokens": 0,
         "cache_creation_ephemeral_1h_input_tokens": 0,
+        "api_input_tokens": 0,
+        "api_output_tokens": 0,
+        "has_api_token_data": False,
     }
 
     if path is None or not path.is_file():
         return enrichment
+
+    model_counts: Counter = Counter()
 
     with path.open(encoding="utf-8") as handle:
         for raw_line in handle:
@@ -710,19 +720,32 @@ def read_claude_session_enrichment(path: Path | None) -> dict:
 
             model = message.get("model")
             if isinstance(model, str) and model:
-                enrichment["model"] = model
+                model_counts[model] += 1
 
             usage = message.get("usage")
             if not isinstance(usage, dict):
                 continue
 
-            enrichment["cache_creation_input_tokens"] += int(usage.get("cache_creation_input_tokens") or 0)
-            enrichment["cache_read_input_tokens"] += int(usage.get("cache_read_input_tokens") or 0)
+            msg_input = int(usage.get("input_tokens") or 0)
+            msg_output = int(usage.get("output_tokens") or 0)
+            msg_cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+            msg_cache_read = int(usage.get("cache_read_input_tokens") or 0)
+
+            enrichment["api_input_tokens"] += msg_input + msg_cache_creation + msg_cache_read
+            enrichment["api_output_tokens"] += msg_output
+            enrichment["cache_creation_input_tokens"] += msg_cache_creation
+            enrichment["cache_read_input_tokens"] += msg_cache_read
+
+            if msg_input > 0 or msg_output > 0:
+                enrichment["has_api_token_data"] = True
 
             cache_creation = usage.get("cache_creation") or {}
             if isinstance(cache_creation, dict):
                 enrichment["cache_creation_ephemeral_5m_input_tokens"] += int(cache_creation.get("ephemeral_5m_input_tokens") or 0)
                 enrichment["cache_creation_ephemeral_1h_input_tokens"] += int(cache_creation.get("ephemeral_1h_input_tokens") or 0)
+
+    if model_counts:
+        enrichment["model"] = model_counts.most_common(1)[0][0]
 
     return enrichment
 
@@ -758,6 +781,12 @@ def read_claude_session(
 
     input_tokens = int(payload.get("input_tokens") or 0)
     output_tokens = int(payload.get("output_tokens") or 0)
+    has_enriched_tokens = False
+
+    if enrichment["has_api_token_data"]:
+        input_tokens = enrichment["api_input_tokens"]
+        output_tokens = enrichment["api_output_tokens"]
+        has_enriched_tokens = True
 
     return ClaudeSessionRecord(
         session_id=session_id,
@@ -776,6 +805,7 @@ def read_claude_session(
         cache_read_input_tokens=enrichment["cache_read_input_tokens"],
         cache_creation_ephemeral_5m_input_tokens=enrichment["cache_creation_ephemeral_5m_input_tokens"],
         cache_creation_ephemeral_1h_input_tokens=enrichment["cache_creation_ephemeral_1h_input_tokens"],
+        has_enriched_tokens=has_enriched_tokens,
     )
 
 
@@ -858,6 +888,7 @@ def aggregate_claude(
 
     unknown_model_sessions = 0
     cache_observed_sessions = 0
+    enriched_token_sessions = 0
 
     for session in sessions:
         month_key = session.timestamp_local.strftime("%Y-%m")
@@ -874,6 +905,8 @@ def aggregate_claude(
             unknown_model_sessions += 1
         if session.cache_creation_input_tokens or session.cache_read_input_tokens:
             cache_observed_sessions += 1
+        if session.has_enriched_tokens:
+            enriched_token_sessions += 1
 
     monthly = []
     for month_key in sorted(by_month):
@@ -924,12 +957,22 @@ def aggregate_claude(
 
     durations = [session.duration_s for session in sessions if session.duration_s is not None]
 
+    meta_only_sessions = len(sessions) - enriched_token_sessions
+
     notes = [
-        f"Source of truth is JSON under {display_path(claude_dir / 'usage-data' / 'session-meta')}.",
-        "Model and cache enrichment come from matching Claude project transcripts under ~/.claude/projects when available.",
+        f"Source of truth is JSON under {display_path(claude_dir / 'usage-data' / 'session-meta')}, enriched with API-level token data from matched project transcripts when available.",
+        "Model identity is the most frequently observed model across all messages in the matched Claude transcript.",
         "Spend is unavailable in v1. This dashboard does not claim billable Claude dollars from local usage alone.",
         "Cache token fields are shown only when the matched Claude transcript exposed them.",
     ]
+
+    if enriched_token_sessions:
+        detail = f"{enriched_token_sessions} sessions used API-level tokens from matched transcripts."
+        if meta_only_sessions:
+            detail += f" {meta_only_sessions} sessions used session-metadata tokens only (which may undercount actual API consumption)."
+        notes.append(detail)
+    else:
+        notes.append("No sessions had matched transcripts with API-level token data. All token counts come from session metadata (which may undercount actual API consumption).")
 
     if unknown_model_sessions:
         notes.append(f"{unknown_model_sessions} sessions did not have a matching Claude transcript with a model name.")
@@ -990,4 +1033,5 @@ def aggregate_claude(
         "spend": spend_info,
         "notes": notes,
         "unknown_model_sessions": unknown_model_sessions,
+        "enriched_token_sessions": enriched_token_sessions,
     }
