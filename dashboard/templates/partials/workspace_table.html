@@ -1,0 +1,38 @@
+<div class="workspace-table-wrap">
+  <table class="workspace-table">
+    <thead>
+      <tr>
+        <th>Workspace</th>
+        <th>Sessions</th>
+        <th>Tokens</th>
+        <th>Estimated cost</th>
+        <th>Last active</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if workspace_rows %}
+        {% for row in workspace_rows %}
+          <tr
+            class="{{ 'is-selected' if row.selected else '' }}"
+            data-workspace-id="{{ row.workspace_id }}"
+          >
+            <td>
+              <div class="workspace-cell">
+                <strong>{{ row.display_label or row.workspace_label }}</strong>
+                <span>{{ row.repo_name or '' }}</span>
+              </div>
+            </td>
+            <td>{{ row.sessions_label }}</td>
+            <td>{{ row.total_tokens_label }}</td>
+            <td>{{ row.estimated_cost_label }}</td>
+            <td>{{ row.last_active_at }}</td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="5" class="empty-state">No sessions match the current filters.</td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>

@@ -1,0 +1,5 @@
+duckdb>=1.5,<2
+fastapi>=0.118,<1
+httpx>=0.28,<1
+jinja2>=3.1,<4
+uvicorn>=0.36,<1

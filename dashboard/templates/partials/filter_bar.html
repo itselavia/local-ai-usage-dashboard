@@ -1,0 +1,63 @@
+<section class="filter-bar">
+  <div class="metric-toggle" role="tablist" aria-label="Metric">
+    {% for option in filter_options.metric_options %}
+      <a
+        class="metric-toggle__item{% if option.value == filters.metric %} is-active{% endif %}"
+        href="{{ metric_links[option.value] }}"
+      >
+        {{ option.label }}
+      </a>
+    {% endfor %}
+  </div>
+
+  <form method="get" class="filter-form">
+    <label class="filter-field">
+      <span>Provider</span>
+      <select name="provider">
+        {% for option in filter_options.provider_options %}
+          <option value="{{ option.value }}"{% if option.value == filters.provider %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="filter-field">
+      <span>Workspace</span>
+      <select name="workspace">
+        {% for option in filter_options.workspace_options %}
+          <option value="{{ option.value }}"{% if option.value == filters.workspace %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="filter-field">
+      <span>From</span>
+      <input type="date" name="date_from" min="{{ filter_options.min_day }}" max="{{ filter_options.max_day }}" value="{{ filters.from }}">
+    </label>
+
+    <label class="filter-field">
+      <span>To</span>
+      <input type="date" name="date_to" min="{{ filter_options.min_day }}" max="{{ filter_options.max_day }}" value="{{ filters.to }}">
+    </label>
+
+    <label class="filter-field is-compact">
+      <span>Metric</span>
+      <select name="metric">
+        {% for option in filter_options.metric_options %}
+          <option value="{{ option.value }}"{% if option.value == filters.metric %} selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="filter-check">
+      <input type="checkbox" name="include_temp" value="1"{% if filters.include_temp %} checked{% endif %}>
+      <span>Include temp</span>
+    </label>
+
+    <label class="filter-check">
+      <input type="checkbox" name="anonymize" value="1"{% if filters.anonymize %} checked{% endif %}>
+      <span>Anonymize labels</span>
+    </label>
+
+    <button type="submit" class="filter-submit">Apply</button>
+  </form>
+</section>

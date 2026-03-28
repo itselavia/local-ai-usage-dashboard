@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block content %}
+  {% if context.empty_state %}
+    <section class="panel">
+      <p class="empty-state">{{ context.empty_state }}</p>
+    </section>
+  {% else %}
+    <section class="metric-grid">
+      {% for metric in context.headline_metrics %}
+        <article class="metric-card">
+          <p class="metric-label">{{ metric.label }}</p>
+          <h2 class="metric-value">{{ metric.display_value }}</h2>
+          <p class="metric-detail">{{ metric.detail }}</p>
+        </article>
+      {% endfor %}
+    </section>
+
+    <section class="panel-grid panel-grid-wide">
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Daily trend</h2>
+          <p>Cost, tokens, or sessions across the current filter window.</p>
+        </div>
+        <div class="chart-frame js-chart" data-chart="overview-trend"></div>
+        <script type="application/json" id="overview-trend-data">{{ context.cost_trend_series | tojson }}</script>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Work shape</h2>
+          <p>How the current work leans across tools, web, agents, edits, and MCP.</p>
+        </div>
+        <div class="chart-frame js-chart" data-chart="overview-work-shape"></div>
+        <script type="application/json" id="overview-work-shape-data">{{ context.work_shape_rows | tojson }}</script>
+      </article>
+    </section>
+
+    <section class="panel-grid">
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Provider mix</h2>
+          <p>Ranked by the active metric.</p>
+        </div>
+        <div class="chart-frame js-chart" data-chart="overview-provider-mix"></div>
+        <script type="application/json" id="overview-provider-mix-data">{{ context.provider_mix_rows | tojson }}</script>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Model mix</h2>
+          <p>Top models in the current view.</p>
+        </div>
+        <div class="chart-frame js-chart" data-chart="overview-model-mix"></div>
+        <script type="application/json" id="overview-model-mix-data">{{ context.model_mix_rows | tojson }}</script>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Top workspaces</h2>
+        <p>Ranked by the active metric. Click through to inspect one workspace in detail.</p>
+      </div>
+      <div class="workspace-table" role="table">
+        <div class="workspace-table-head" role="row">
+          <span>Workspace</span>
+          <span>Provider</span>
+          <span>Dominant model</span>
+          <span>Sessions</span>
+          <span>Tokens</span>
+          <span>Cost</span>
+        </div>
+        {% for row in context.workspace_rows %}
+          <a class="workspace-table-row js-workspace-row" href="/workspaces?workspace={{ row.workspace_id | urlencode }}&provider={{ context.filters.provider }}&metric={{ context.filters.metric }}{% if context.filters.date_from %}&date_from={{ context.filters.date_from }}{% endif %}{% if context.filters.date_to %}&date_to={{ context.filters.date_to }}{% endif %}{% if context.filters.include_temp %}&include_temp=1{% endif %}{% if context.filters.anonymize %}&anonymize=1{% endif %}" data-workspace-id="{{ row.workspace_id }}" role="row">
+            <span>{{ row.display_label or row.label }}</span>
+            <span>{{ row.provider_label }}</span>
+            <span>{{ row.dominant_model }}</span>
+            <span>{{ row.sessions_label or row.sessions }}</span>
+            <span>{{ row.total_tokens_label or row.tokens }}</span>
+            <span>{{ row.estimated_cost_label or row.cost }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

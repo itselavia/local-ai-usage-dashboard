@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block content %}
+  {% if context.empty_state %}
+    <section class="panel">
+      <p class="empty-state">{{ context.empty_state }}</p>
+    </section>
+  {% else %}
+    <section class="panel-grid">
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Workspace ranking</h2>
+          <p>Full ranking for the current filter window. Click a row to focus the right-hand panel.</p>
+        </div>
+        <div class="workspace-table workspace-table--compact" role="table">
+          <div class="workspace-table-head" role="row">
+            <span>Workspace</span>
+            <span>Shape</span>
+            <span>Sessions</span>
+            <span>Tokens</span>
+            <span>Cost</span>
+          </div>
+          {% for row in context.workspace_rows %}
+            <a class="workspace-table-row js-workspace-row{% if context.selected_workspace and row.workspace_id == context.selected_workspace.workspace_id %} is-selected{% endif %}" href="/workspaces?workspace={{ row.workspace_id | urlencode }}&provider={{ context.filters.provider }}&metric={{ context.filters.metric }}{% if context.filters.date_from %}&date_from={{ context.filters.date_from }}{% endif %}{% if context.filters.date_to %}&date_to={{ context.filters.date_to }}{% endif %}{% if context.filters.include_temp %}&include_temp=1{% endif %}{% if context.filters.anonymize %}&anonymize=1{% endif %}" data-workspace-id="{{ row.workspace_id }}" role="row">
+              <span>{{ row.display_label or row.label }}</span>
+              <span>{{ row.work_shape }}</span>
+              <span>{{ row.sessions_label or row.sessions }}</span>
+              <span>{{ row.total_tokens_label or row.tokens }}</span>
+              <span>{{ row.estimated_cost_label or row.cost }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h2>{{ context.selected_workspace.display_label or context.selected_workspace.label }}</h2>
+          <p>{{ context.selected_workspace.provider_label }} · {{ context.selected_workspace.dominant_model }}</p>
+        </div>
+
+        <section class="metric-grid metric-grid-compact">
+          {% for metric in context.selected_workspace_metrics %}
+            <article class="metric-card">
+              <p class="metric-label">{{ metric.label }}</p>
+              <h2 class="metric-value">{{ metric.display_value or metric.value }}</h2>
+              <p class="metric-detail">{{ metric.detail }}</p>
+            </article>
+          {% endfor %}
+        </section>
+
+        <div class="panel-stack">
+          <div class="chart-frame js-chart" data-chart="workspace-trend"></div>
+          <script type="application/json" id="workspace-trend-data">{{ context.selected_workspace_trend | tojson }}</script>
+
+          <div class="chart-frame js-chart" data-chart="workspace-model-mix"></div>
+          <script type="application/json" id="workspace-model-mix-data">{{ context.selected_workspace_model_mix | tojson }}</script>
+
+          <div class="chart-frame js-chart" data-chart="workspace-provider-mix"></div>
+          <script type="application/json" id="workspace-provider-mix-data">{{ context.selected_workspace_provider_mix | tojson }}</script>
+
+          <div class="chart-frame js-chart" data-chart="workspace-work-shape"></div>
+          <script type="application/json" id="workspace-work-shape-data">{{ context.selected_workspace_work_shape | tojson }}</script>
+        </div>
+      </article>
+    </section>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="panel-grid">
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Estimate rules</h2>
+        <p>The dashboard is estimate-first. It shows local equivalent cost, not provider billing.</p>
+      </div>
+      <div class="summary-stack">
+        {% for rule in context.estimate_rules %}
+          <div class="summary-block">
+            <h3>{{ rule.title }}</h3>
+            <p>{{ rule.body }}</p>
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Coverage</h2>
+        <p>How much of the current view is direct, approximate, or partial.</p>
+      </div>
+      <div class="summary-list">
+        {% for row in context.coverage_summary %}
+          <div class="summary-row">
+            <span>{{ row.label }}</span>
+            <strong>{{ row.value }}</strong>
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+
+  <section class="panel-grid">
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Pricing snapshots</h2>
+        <p>Current model rates loaded into the database.</p>
+      </div>
+      <div class="summary-list">
+        {% for row in context.pricing_summary %}
+          <div class="summary-row is-tall">
+            <span>
+              <strong>{{ row.provider }}</strong>
+              <small>{{ row.model }}</small>
+            </span>
+            <span>
+              <strong>{{ row.freshness_label }}</strong>
+              <small>{{ row.checked_at }}</small>
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Exclusions</h2>
+        <p>Sessions that were intentionally left out of cost estimation.</p>
+      </div>
+      <div class="summary-list">
+        {% for row in context.exclusions_summary %}
+          <div class="summary-row">
+            <span>{{ row.label }}</span>
+            <strong>{{ row.value }}</strong>
+          </div>
+        {% else %}
+          <p class="muted-note">No excluded sessions in the current view.</p>
+        {% endfor %}
+      </div>
+
+      {% if context.unsupported_models %}
+        <div class="subpanel">
+          <p class="subpanel-title">Unsupported models</p>
+          <div class="summary-list">
+            {% for row in context.unsupported_models %}
+              <div class="summary-row">
+                <span>{{ row.label }}</span>
+                <strong>{{ row.value }}</strong>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel-grid">
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Doctor</h2>
+        <p>Latest ingest health from the local database.</p>
+      </div>
+      <div class="summary-list">
+        <div class="summary-row"><span>Latest ingest</span><strong>{{ context.doctor_summary.latest_ingest_at }}</strong></div>
+        <div class="summary-row"><span>Sessions</span><strong>{{ context.doctor_summary.session_count }}</strong></div>
+        <div class="summary-row"><span>Partial parses</span><strong>{{ context.doctor_summary.partial_parses }}</strong></div>
+        <div class="summary-row"><span>Excluded sessions</span><strong>{{ context.doctor_summary.excluded_sessions }}</strong></div>
+        <div class="summary-row"><span>Unsupported sessions</span><strong>{{ context.doctor_summary.unsupported_sessions }}</strong></div>
+      </div>
+
+      {% if context.doctor_summary.pricing_freshness %}
+        <div class="subpanel">
+          <p class="subpanel-title">Pricing freshness</p>
+          <div class="summary-list">
+            {% for row in context.doctor_summary.pricing_freshness %}
+              <div class="summary-row">
+                <span>{{ row.label }}</span>
+                <strong>{{ row.value }}</strong>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+    </article>
+
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Source paths</h2>
+        <p>Files and directories the local dashboard depends on.</p>
+      </div>
+      <div class="summary-list">
+        {% for row in context.source_paths %}
+          <div class="summary-row is-tall">
+            <span>
+              <strong>{{ row.label }}</strong>
+              <small>{{ row.path }}</small>
+            </span>
+            <strong>{% if row.exists %}Present{% else %}Missing{% endif %}</strong>
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+{% endblock %}

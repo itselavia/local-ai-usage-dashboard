@@ -1,5 +1,10 @@
 # Local AI Usage Dashboard v1 Implementation Spec
 
+This file is the implementation reference for phases 1 and 2.
+
+- `README.md` is the operator guide
+- `PHASE3_PLAN.md` is the next-phase planning document
+
 ## Goal
 
 Build a local, open-source dashboard for Codex/OpenAI and Claude that answers:
@@ -97,6 +102,8 @@ dashboard/
   db.py
   ingest.py
   estimates.py
+  generate.py
+  doctor.py
   queries.py
   routes.py
   providers/
@@ -111,9 +118,6 @@ dashboard/
     partials/
       filter_bar.html
       trust_banner.html
-      metric_card.html
-      panel.html
-      workspace_table.html
   static/
     dashboard.css
     dashboard.js
@@ -121,13 +125,14 @@ dashboard/
     schema.sql
     views.sql
 tests/
-  test_db.py
-  test_ingest_openai.py
-  test_ingest_claude.py
-  test_estimates.py
+  test_dashboard_estimates.py
+  test_dashboard_ingest.py
+  test_dashboard_openai_local.py
+  test_dashboard_phase1.py
   test_queries.py
   test_routes.py
   test_doctor.py
+  test_usage_report.py
 ```
 
 ### Current repo migration stance
@@ -144,9 +149,25 @@ Use the current files as the migration boundary instead of rewriting everything 
 - `usage_report_common.py`: keep shared formatting, path, timezone, and snapshot helpers where useful
 - `usage_report_providers.py`: keep provider discovery, parsing, pricing, and current aggregate rules as phase-1 source of truth
 - `usage_report_render.py`: treat as legacy output only; do not extend it further
+- `dashboard/cli.py`: new command entrypoint for ingest, generate, doctor, and serve wiring
+- `dashboard/generate.py`: static snapshot export from DuckDB
+- `dashboard/doctor.py`: local health and coverage summary
 - `tests/test_usage_report.py`: keep existing regression coverage and add parity tests beside it
 
 The first architectural change is data normalization into DuckDB, not a wholesale parser rewrite.
+
+Current status:
+
+- phase 1 is complete
+- phase 2 is complete for the core command and web wiring
+- `dashboard/cli.py`, `dashboard/app.py`, `dashboard/routes.py`, `dashboard/queries.py`, `dashboard/generate.py`, and `dashboard/doctor.py` are now the main phase-2 surfaces
+- the remaining work is polish and parity hardening, not new core architecture
+
+Related docs:
+
+- `README.md`: clone-and-run entry point
+- `PHASE3_PLAN.md`: polish and release-hardening plan
+- `RELEASE_CHECKLIST.md`: pre-release verification steps
 
 ## Module Responsibilities
 
@@ -221,7 +242,12 @@ Store all generated artifacts under repo-local `.dashboard/`.
   snapshots/
     latest/
       index.html
-      assets/
+      overview.html
+      workspaces.html
+      methodology.html
+      static/
+        dashboard.css
+        dashboard.js
 ```
 
 ### Storage rules
@@ -230,6 +256,7 @@ Store all generated artifacts under repo-local `.dashboard/`.
 - `pricing_snapshot.json` is a human-readable fallback and diffable artifact
 - `metadata.json` stores app version and most recent ingest summary
 - static snapshots are disposable outputs, not source of truth
+- anonymized snapshots are the public-sharing form of the product and must not include raw workspace labels or path-like source metadata
 
 ## CLI Contract
 
@@ -275,6 +302,10 @@ dashboard generate
   [--output-dir PATH]
   [--anonymize-workspaces]
 ```
+
+Behavior:
+
+- `--anonymize-workspaces` must produce a commit-safe export with anonymized workspace labels and redacted path-like metadata
 
 ### `dashboard doctor`
 

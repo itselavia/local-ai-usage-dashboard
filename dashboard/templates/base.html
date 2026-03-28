@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title or title }} · Local AI Usage Dashboard</title>
+  <link rel="stylesheet" href="{{ request.url_for('static', path='dashboard.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
+  <script src="{{ request.url_for('static', path='dashboard.js') }}" defer></script>
+</head>
+<body>
+  {% set query_string = request.url.query %}
+  {% set current_path = page_path or request.url.path %}
+  <div class="page-shell">
+    <header class="page-header">
+      <div class="masthead">
+        <p class="eyebrow">Local AI Usage Dashboard</p>
+        <h1>{{ page_title or title }}</h1>
+        <p class="lede">{{ page_description or "Estimated cost, token flow, cache behavior, and workspace concentration from local Codex/OpenAI and Claude data." }}</p>
+      </div>
+      <nav class="page-nav" aria-label="Primary">
+        <a class="nav-link{% if current_path == '/overview' %} is-active{% endif %}" href="/overview{% if query_string %}?{{ query_string }}{% endif %}">Overview</a>
+        <a class="nav-link{% if current_path == '/workspaces' %} is-active{% endif %}" href="/workspaces{% if query_string %}?{{ query_string }}{% endif %}">Workspaces</a>
+        <a class="nav-link{% if current_path == '/methodology' %} is-active{% endif %}" href="/methodology{% if query_string %}?{{ query_string }}{% endif %}">Methodology</a>
+      </nav>
+    </header>
+
+    {% include "partials/filter_bar.html" %}
+    {% include "partials/trust_banner.html" %}
+
+    <main class="page-content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

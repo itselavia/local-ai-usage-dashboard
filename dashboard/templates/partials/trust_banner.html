@@ -1,0 +1,26 @@
+<section class="trust-banner">
+  <div class="trust-copy">
+    <p class="eyebrow">Trust</p>
+    <p class="trust-summary">{{ trust_banner.summary_label or trust_banner.summary }}</p>
+    {% if trust_banner.summary and trust_banner.summary != trust_banner.summary_label %}
+      <p class="trust-summary trust-summary--subtle">{{ trust_banner.summary }}</p>
+    {% endif %}
+    {% if trust_banner.notes %}
+      <ul class="trust-notes">
+        {% for note in trust_banner.notes %}
+          <li>{{ note }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+  {% if trust_banner.chips %}
+    <div class="trust-chips">
+      {% for chip in trust_banner.chips %}
+        <div class="trust-chip">
+          <span class="trust-chip-label">{{ chip.label }}</span>
+          <strong class="trust-chip-value">{{ chip.value }}</strong>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>

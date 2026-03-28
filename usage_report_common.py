@@ -14,8 +14,9 @@ from typing import Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-DEFAULT_OUTPUT = Path(__file__).resolve().parent / "index.html"
-PRICING_SNAPSHOT = Path(__file__).resolve().parent / ".pricing_snapshot.json"
+LEGACY_STATE_DIR = Path(__file__).resolve().parent / ".dashboard" / "legacy"
+DEFAULT_OUTPUT = LEGACY_STATE_DIR / "index.html"
+PRICING_SNAPSHOT = LEGACY_STATE_DIR / "pricing_snapshot.json"
 
 OPENAI_PRICING_URL = "https://developers.openai.com/api/docs/pricing"
 OPENAI_MODEL_PRICING_URLS = {
@@ -361,6 +362,7 @@ def load_pricing_snapshot(snapshot_path: Path) -> dict:
 
 def write_provider_snapshots(snapshot_path: Path, providers: dict[str, dict]) -> None:
     payload = {"providers": providers}
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
