@@ -441,20 +441,20 @@ def calculate_openai_spend(
     }
 
 
-def build_recent_14_days(by_day: dict, latest_day) -> list[dict]:
-    recent_14_days = []
-
-    for offset in range(13, -1, -1):
-        day = latest_day - timedelta(days=offset)
+def build_full_daily_series(by_day: dict, first_day, latest_day) -> list[dict]:
+    """Return one entry per calendar day from first_day to latest_day, filling gaps with zero."""
+    series = []
+    day = first_day
+    while day <= latest_day:
         totals = by_day.get(day, Counter())
-        recent_14_days.append(
+        series.append(
             {
                 "day": day.isoformat(),
                 "tokens": totals.get("total_tokens", 0),
             }
         )
-
-    return recent_14_days
+        day += timedelta(days=1)
+    return series
 
 
 def aggregate_openai(
@@ -477,7 +477,7 @@ def aggregate_openai(
     last30 = sum_days(by_day, latest_day - timedelta(days=29), latest_day)
 
     streak_current, streak_longest = current_and_longest_streak(by_day.keys(), latest_day)
-    recent_14_days = build_recent_14_days(by_day, latest_day)
+    daily_series = build_full_daily_series(by_day, focus_sessions[0].local_day, latest_day)
 
     by_month = defaultdict(Counter)
     by_model = defaultdict(Counter)
@@ -542,25 +542,45 @@ def aggregate_openai(
             }
         )
 
-    top_hours = []
-    for hour, totals in sorted(by_hour.items(), key=lambda item: item[1]["total_tokens"], reverse=True)[:5]:
-        top_hours.append(
-            {
-                "label": f"{hour:02d}:00",
-                "sessions": totals["sessions"],
-                "tokens": totals["total_tokens"],
-            }
-        )
+    hour_chart = [
+        {
+            "label": f"{h:02d}:00",
+            "hour": h,
+            "sessions": by_hour[h]["sessions"],
+            "tokens": by_hour[h]["total_tokens"],
+        }
+        for h in range(24)
+    ]
 
-    top_weekdays = []
-    for weekday, totals in sorted(by_weekday.items(), key=lambda item: item[1]["total_tokens"], reverse=True):
-        top_weekdays.append(
-            {
-                "label": weekday,
-                "sessions": totals["sessions"],
-                "tokens": totals["total_tokens"],
-            }
-        )
+    _WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    weekday_chart = [
+        {
+            "label": day,
+            "sessions": by_weekday[day]["sessions"],
+            "tokens": by_weekday[day]["total_tokens"],
+        }
+        for day in _WEEKDAY_ORDER
+    ]
+
+    _HIST_BUCKETS = [
+        (0, 100_000, "<100K"),
+        (100_000, 500_000, "100K\u2013500K"),
+        (500_000, 1_000_000, "500K\u20131M"),
+        (1_000_000, 5_000_000, "1M\u20135M"),
+        (5_000_000, 10_000_000, "5M\u201310M"),
+        (10_000_000, 50_000_000, "10M\u201350M"),
+        (50_000_000, float("inf"), ">50M"),
+    ]
+    _session_tokens = [s.total_tokens for s in focus_sessions]
+    _n = len(_session_tokens) or 1
+    session_histogram = [
+        {
+            "label": lbl,
+            "count": sum(1 for t in _session_tokens if lo <= t < hi),
+            "share": sum(1 for t in _session_tokens if lo <= t < hi) / _n,
+        }
+        for lo, hi, lbl in _HIST_BUCKETS
+    ]
 
     top_days = []
     for day, totals in sorted(by_day.items(), key=lambda item: item[1]["total_tokens"], reverse=True)[:6]:
@@ -591,12 +611,12 @@ def aggregate_openai(
     temp_share = temp_tokens / all_totals["total_tokens"] if all_totals["total_tokens"] else 0
     uncached_input = focus_totals["input_tokens"] - focus_totals["cached_input_tokens"]
     cache_share = focus_totals["cached_input_tokens"] / focus_totals["input_tokens"] if focus_totals["input_tokens"] else 0
-    all_in_total = focus_totals["total_tokens"]
+    all_in_total = all_totals["total_tokens"]
     latest_projection = next((item["projection"] for item in monthly if item["month"] == latest_day.strftime("%Y-%m")), None)
 
     notes = [
-        "Source of truth is each session log's final token_count event.",
-        "Recorded total uses the log's total_tokens field.",
+        "Source of truth is the token_count event with the highest input+output sum per session (guards against corrupt trailing events that zero out token fields).",
+        "Recorded total is derived from input_tokens + output_tokens; the log's total_tokens field is ignored as it can carry a stale offset from resumed sessions.",
         "Temp sessions are identified from paths under /tmp, /var/folders, or pytest temp directories.",
         "Spend is shown only when official OpenAI pricing was refreshed live on the current run.",
         "Spend charges uncached input at the input rate, cached input at the cached-input rate, and output at the published output rate.",
@@ -651,12 +671,13 @@ def aggregate_openai(
         "last30_sessions": last30["sessions"],
         "last30_share": last30["total_tokens"] / focus_totals["total_tokens"] if focus_totals["total_tokens"] else 0,
         "temp_share": temp_share,
-        "recent_14_days": recent_14_days,
+        "daily_series": daily_series,
         "monthly": monthly,
         "top_models": top_models,
         "top_workspaces": top_workspaces,
-        "top_hours": top_hours,
-        "top_weekdays": top_weekdays,
+        "hour_chart": hour_chart,
+        "weekday_chart": weekday_chart,
+        "session_histogram": session_histogram,
         "top_days": top_days,
         "largest_sessions": largest_sessions,
         "pricing": {
@@ -750,15 +771,59 @@ def read_claude_session_enrichment(path: Path | None) -> dict:
     return enrichment
 
 
+def _partial_parse_session_meta(raw: str) -> dict | None:
+    """Recover scalar fields from a truncated session-meta JSON file.
+
+    Truncation typically occurs inside the first_prompt string, which is written
+    after all billing-relevant scalar fields.  We extract the fields we need with
+    targeted regex patterns rather than abandoning the session entirely.
+
+    Returns a dict compatible with the full payload shape, or None if the minimum
+    required fields (session_id and start_time) cannot be recovered.
+    """
+
+    def _str(key: str) -> str | None:
+        m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"((?:[^"\\]|\\.)*?)(?:"|$)', raw)
+        return m.group(1) if m else None
+
+    def _num(key: str) -> float | None:
+        m = re.search(r'"' + re.escape(key) + r'"\s*:\s*(-?\d+(?:\.\d+)?)', raw)
+        return float(m.group(1)) if m else None
+
+    session_id = _str("session_id")
+    start_time = _str("start_time")
+    if not session_id or not start_time:
+        return None
+
+    return {
+        "session_id": session_id,
+        "start_time": start_time,
+        "project_path": _str("project_path") or "",
+        "input_tokens": int(_num("input_tokens") or 0),
+        "output_tokens": int(_num("output_tokens") or 0),
+        "duration_minutes": _num("duration_minutes"),
+        "user_message_count": int(_num("user_message_count") or 0),
+        "assistant_message_count": int(_num("assistant_message_count") or 0),
+    }
+
+
 def read_claude_session(
     path: Path,
     report_tz: tzinfo,
     project_index: dict[str, Path],
 ) -> ClaudeSessionRecord | None:
+    is_partial_parse = False
+    raw_text = None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        raw_text = path.read_text(encoding="utf-8")
+        payload = json.loads(raw_text)
+    except OSError:
         return None
+    except json.JSONDecodeError:
+        payload = _partial_parse_session_meta(raw_text)
+        if payload is None:
+            return None
+        is_partial_parse = True
 
     if not isinstance(payload, dict):
         return None
@@ -806,6 +871,7 @@ def read_claude_session(
         cache_creation_ephemeral_5m_input_tokens=enrichment["cache_creation_ephemeral_5m_input_tokens"],
         cache_creation_ephemeral_1h_input_tokens=enrichment["cache_creation_ephemeral_1h_input_tokens"],
         has_enriched_tokens=has_enriched_tokens,
+        is_partial_parse=is_partial_parse,
     )
 
 
@@ -880,7 +946,7 @@ def aggregate_claude(
     last30 = sum_days(by_day, latest_day - timedelta(days=29), latest_day)
 
     streak_current, streak_longest = current_and_longest_streak(by_day.keys(), latest_day)
-    recent_14_days = build_recent_14_days(by_day, latest_day)
+    daily_series = build_full_daily_series(by_day, sessions[0].local_day, latest_day)
 
     by_month = defaultdict(Counter)
     by_model = defaultdict(Counter)
@@ -889,6 +955,7 @@ def aggregate_claude(
     unknown_model_sessions = 0
     cache_observed_sessions = 0
     enriched_token_sessions = 0
+    partial_parse_sessions = 0
 
     for session in sessions:
         month_key = session.timestamp_local.strftime("%Y-%m")
@@ -907,6 +974,8 @@ def aggregate_claude(
             cache_observed_sessions += 1
         if session.has_enriched_tokens:
             enriched_token_sessions += 1
+        if session.is_partial_parse:
+            partial_parse_sessions += 1
 
     monthly = []
     for month_key in sorted(by_month):
@@ -978,6 +1047,11 @@ def aggregate_claude(
         notes.append(f"{unknown_model_sessions} sessions did not have a matching Claude transcript with a model name.")
     if cache_observed_sessions == 0:
         notes.append("No Claude cache token fields were observed in the matched transcripts on this run.")
+    if partial_parse_sessions:
+        notes.append(
+            f"{partial_parse_sessions} sessions had truncated metadata files (JSON write interrupted) and were recovered "
+            "via field extraction. Their token counts come from session metadata only and may undercount actual API consumption."
+        )
 
     now = datetime.now(report_tz)
     return {
@@ -1015,7 +1089,7 @@ def aggregate_claude(
         "last30_tokens": last30["total_tokens"],
         "last30_sessions": last30["sessions"],
         "last30_share": last30["total_tokens"] / totals["total_tokens"] if totals["total_tokens"] else 0,
-        "recent_14_days": recent_14_days,
+        "daily_series": daily_series,
         "monthly": monthly,
         "top_models": top_models,
         "top_workspaces": top_workspaces,
@@ -1034,4 +1108,5 @@ def aggregate_claude(
         "notes": notes,
         "unknown_model_sessions": unknown_model_sessions,
         "enriched_token_sessions": enriched_token_sessions,
+        "partial_parse_sessions": partial_parse_sessions,
     }

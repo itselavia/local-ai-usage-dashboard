@@ -86,6 +86,7 @@ class ClaudeSessionRecord:
     cache_creation_ephemeral_5m_input_tokens: int
     cache_creation_ephemeral_1h_input_tokens: int
     has_enriched_tokens: bool
+    is_partial_parse: bool = False
 
     @property
     def local_day(self):

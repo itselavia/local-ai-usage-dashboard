@@ -182,8 +182,68 @@ def anonymize_provider_workspaces(stats: dict, aliases: dict[str, str]) -> None:
     notes.append("Workspace labels were anonymized on this run.")
 
 
+def anonymize_provider_metadata(stats: dict) -> None:
+    provider_key = stats.get("provider_key")
+
+    if provider_key == "openai":
+        stats["source"] = "local Codex logs"
+    elif provider_key == "claude":
+        stats["source"] = "local Claude metadata"
+    else:
+        stats["source"] = "local source"
+
+    sanitized_notes: list[str] = []
+    for note in stats.get("notes", []):
+        if note == "Temp sessions are identified from paths under /tmp, /var/folders, or pytest temp directories.":
+            sanitized_notes.append("Temp sessions are identified from ephemeral and pytest temp directories.")
+            continue
+
+        if note.startswith("Source of truth is JSON under "):
+            sanitized_notes.append(
+                "Source of truth is local Claude session metadata, enriched with API-level token data from matched project transcripts when available."
+            )
+            continue
+
+        sanitized_notes.append(note)
+
+    stats["notes"] = sanitized_notes
+
+
+def anonymize_page_notes(page_notes: list[str]) -> list[str]:
+    sanitized: list[str] = []
+
+    for note in page_notes:
+        if note.startswith("Codex / OpenAI omitted: directory not found at "):
+            sanitized.append("Codex / OpenAI omitted: local directory not found.")
+            continue
+
+        if note.startswith("Codex / OpenAI omitted: no session logs found under "):
+            sanitized.append("Codex / OpenAI omitted: no local session logs found.")
+            continue
+
+        if note.startswith("Claude omitted: directory not found at "):
+            sanitized.append("Claude omitted: local directory not found.")
+            continue
+
+        if note.startswith("Claude omitted: no session metadata found under "):
+            sanitized.append("Claude omitted: no local session metadata found.")
+            continue
+
+        sanitized.append(note)
+
+    return sanitized
+
+
 def anonymize_dashboard_workspaces(dashboard: dict) -> None:
     aliases = build_workspace_aliases(dashboard["providers"])
+    dashboard["anonymized"] = True
+    dashboard["output_label"] = "anonymized report"
+    dashboard["snapshot_path"] = "anonymized"
+    dashboard["page_notes"] = anonymize_page_notes(dashboard["page_notes"])
+
+    for stats in dashboard["providers"]:
+        anonymize_provider_metadata(stats)
+
     if not aliases:
         dashboard["page_notes"].append("Workspace anonymization was requested, but no workspace labels were present.")
         return

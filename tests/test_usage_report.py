@@ -464,6 +464,80 @@ class ClaudeModelAttributionTests(unittest.TestCase):
             self.assertFalse(session.has_enriched_tokens)
 
 
+class ClaudePartialParseTests(unittest.TestCase):
+    def test_truncated_meta_json_is_recovered_via_field_extraction(self) -> None:
+        """Sessions with truncated JSON files are recovered; is_partial_parse is set."""
+        report_tz = timezone.utc
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            session_meta_dir = claude_dir / "usage-data" / "session-meta"
+            session_meta_dir.mkdir(parents=True)
+
+            session_id = "session-truncated"
+            # Simulate a file truncated mid-way through the first_prompt string.
+            # All scalar billing fields appear before first_prompt, so they are recoverable.
+            truncated = (
+                '{\n'
+                '  "session_id": "session-truncated",\n'
+                '  "start_time": "2026-03-11T08:00:00.000Z",\n'
+                '  "project_path": "/Users/testuser/projects/test",\n'
+                '  "duration_minutes": 5,\n'
+                '  "user_message_count": 3,\n'
+                '  "assistant_message_count": 6,\n'
+                '  "input_tokens": 45000,\n'
+                '  "output_tokens": 1500,\n'
+                '  "first_prompt": "Implement the fe'  # truncated here — no closing quote or brace
+            )
+            (session_meta_dir / f"{session_id}.json").write_text(truncated, encoding="utf-8")
+
+            sessions = discover_claude_sessions(claude_dir, report_tz)
+
+            self.assertEqual(len(sessions), 1)
+            session = sessions[0]
+            self.assertEqual(session.session_id, "session-truncated")
+            self.assertEqual(session.cwd, "/Users/testuser/projects/test")
+            self.assertEqual(session.input_tokens, 45000)
+            self.assertEqual(session.output_tokens, 1500)
+            self.assertEqual(session.total_tokens, 46500)
+            self.assertEqual(session.user_messages, 3)
+            self.assertEqual(session.assistant_messages, 6)
+            self.assertEqual(session.duration_s, 300.0)
+            self.assertTrue(session.is_partial_parse)
+            self.assertFalse(session.has_enriched_tokens)
+
+    def test_partial_parse_note_appears_in_aggregate_output(self) -> None:
+        """aggregate_claude() reports the count of partial-parse sessions in its notes."""
+        report_tz = timezone.utc
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            session_meta_dir = claude_dir / "usage-data" / "session-meta"
+            session_meta_dir.mkdir(parents=True)
+
+            truncated = (
+                '{"session_id": "partial-note-test", "start_time": "2026-03-11T08:00:00.000Z",'
+                ' "input_tokens": 100, "output_tokens": 50, "truncated_here": "abc'
+            )
+            (session_meta_dir / "partial-note-test.json").write_text(truncated, encoding="utf-8")
+
+            sessions = discover_claude_sessions(claude_dir, report_tz)
+            self.assertEqual(len(sessions), 1)
+
+            from usage_report_providers import refresh_claude_pricing
+            pricing_info = refresh_claude_pricing(Path(tmpdir) / ".pricing_snapshot.json")
+            stats = aggregate_claude(
+                sessions=sessions,
+                report_tz=report_tz,
+                claude_dir=claude_dir,
+                pricing_info=pricing_info,
+                spend_info=None,
+            )
+
+            self.assertEqual(stats["partial_parse_sessions"], 1)
+            self.assertTrue(any("truncated" in note.lower() for note in stats["notes"]))
+
+
 class WorkspaceAnonymizationTests(unittest.TestCase):
     def test_anonymize_dashboard_workspaces_replaces_rendered_labels(self) -> None:
         dashboard = {
@@ -508,6 +582,59 @@ class WorkspaceAnonymizationTests(unittest.TestCase):
         self.assertIn("Workspace labels were anonymized on this run.", dashboard["providers"][0]["notes"])
         self.assertIn("Workspace labels were anonymized on this run.", dashboard["providers"][1]["notes"])
         self.assertTrue(dashboard["page_notes"])
+
+    def test_anonymize_dashboard_workspaces_removes_path_like_metadata(self) -> None:
+        dashboard = {
+            "generated_at": "2026-03-21 10:00:00 UTC",
+            "include_temp": False,
+            "snapshot_path": "/Users/testuser/.pricing_snapshot.json",
+            "page_notes": [
+                "Codex / OpenAI omitted: directory not found at /Users/testuser/.codex.",
+            ],
+            "providers": [
+                {
+                    "provider_key": "openai",
+                    "title": "Codex / OpenAI",
+                    "recorded_total": 100,
+                    "session_count": 2,
+                    "source": "~/.codex",
+                    "top_workspaces": [
+                        {"label": "/Users/testuser/private-one", "sessions": 2, "tokens": 100, "share": 1.0}
+                    ],
+                    "largest_sessions": [],
+                    "notes": [
+                        "Temp sessions are identified from paths under /tmp, /var/folders, or pytest temp directories.",
+                    ],
+                },
+                {
+                    "provider_key": "claude",
+                    "title": "Claude",
+                    "recorded_total": 50,
+                    "session_count": 1,
+                    "source": "~/.claude",
+                    "top_workspaces": [
+                        {"label": "/Users/testuser/private-two", "sessions": 1, "tokens": 50, "share": 1.0},
+                    ],
+                    "largest_sessions": [],
+                    "notes": [
+                        "Source of truth is JSON under ~/.claude/usage-data/session-meta, enriched with API-level token data from matched project transcripts when available.",
+                    ],
+                },
+            ],
+            "openai": None,
+            "claude": None,
+        }
+
+        anonymize_dashboard_workspaces(dashboard)
+        html = render_html(dashboard, Path("/Users/testuser/Desktop/private-report.html"))
+
+        self.assertEqual(dashboard["providers"][0]["source"], "local Codex logs")
+        self.assertEqual(dashboard["providers"][1]["source"], "local Claude metadata")
+        self.assertEqual(dashboard["snapshot_path"], "anonymized")
+        self.assertIn("Output anonymized report", html)
+        self.assertNotIn("/Users/testuser", html)
+        self.assertNotIn("~/.claude", html)
+        self.assertNotIn("~/.codex", html)
 
 
 if __name__ == "__main__":

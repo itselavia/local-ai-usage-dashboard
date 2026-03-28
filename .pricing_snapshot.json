@@ -1,7 +1,7 @@
 {
   "providers": {
     "openai": {
-      "fetched_at": "2026-03-21 15:46:46 PDT",
+      "fetched_at": "2026-03-27 23:38:48 PDT",
       "models": {
         "gpt-5.1-codex-max": {
           "cached_input_per_million": 0.125,

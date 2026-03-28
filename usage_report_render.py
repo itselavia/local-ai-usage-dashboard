@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from usage_report_common import (
     display_path,
     escape,
     format_currency,
-    format_duration,
     format_growth,
     format_int,
     format_pct,
@@ -14,13 +14,105 @@ from usage_report_common import (
 )
 
 
-def render_progress(value: float, label: str = "") -> str:
-    pct = max(0.0, min(value * 100.0, 100.0))
-    label_html = f"<span>{escape(label)}</span>" if label else ""
+def render_hbar_chart(
+    items: list[dict],
+    label_key: str,
+    value_key: str,
+    format_fn,
+    max_val: float,
+    label_format_fn=None,
+    row_class: str = "",
+) -> str:
+    if label_format_fn is None:
+        label_format_fn = lambda value: value
+
+    rows = []
+
+    for item in items:
+        label = str(item.get(label_key, ""))
+        display_label = str(label_format_fn(label))
+        value = item.get(value_key, 0) or 0
+        pct = min(100.0, (value / max_val * 100) if max_val > 0 else 0)
+        classes = ["hbar-row"]
+        if row_class:
+            classes.append(row_class)
+        rows.append(
+            f'<div class="{" ".join(classes)}">'
+            f'<div class="hbar-label" title="{escape(label)}">{escape(display_label)}</div>'
+            f'<div class="hbar-track"><div class="hbar-fill" style="width:{pct:.1f}%"></div></div>'
+            f'<div class="hbar-value">{escape(format_fn(value))}</div>'
+            "</div>"
+        )
+
+    return '<div class="hbar-chart">' + "".join(rows) + "</div>"
+
+
+_MONTH_ABBR = {
+    1: "Jan",
+    2: "Feb",
+    3: "Mar",
+    4: "Apr",
+    5: "May",
+    6: "Jun",
+    7: "Jul",
+    8: "Aug",
+    9: "Sep",
+    10: "Oct",
+    11: "Nov",
+    12: "Dec",
+}
+
+
+def render_full_series_chart(daily_series: list[dict]) -> str:
+    if not daily_series:
+        return '<p class="muted-note">No activity data.</p>'
+
+    count = len(daily_series)
+    maximum = max((item["tokens"] for item in daily_series), default=0)
+    columns = []
+
+    for index, item in enumerate(daily_series):
+        tokens = item["tokens"]
+        if maximum > 0 and tokens > 0:
+            height = max(2, round((tokens / maximum) * 100))
+        else:
+            height = 0
+
+        date_str = item["day"]
+        label = ""
+        if index == 0 or date_str[8:10] == "01":
+            label = _MONTH_ABBR[int(date_str[5:7])]
+
+        fill_html = ""
+        if height:
+            fill_html = f'<div class="series-fill" style="height:{height}%"></div>'
+
+        columns.append(
+            f'<div class="series-col" title="{escape(f"{date_str}: {format_tokens(tokens)}")}">'
+            f'<div class="series-bar">{fill_html}</div>'
+            f'<div class="series-label">{escape(label)}</div>'
+            "</div>"
+        )
+
+    tick_specs = [
+        (format_tokens(maximum), "0%", "translateY(0)"),
+        (format_tokens(maximum / 2), "50%", "translateY(-50%)"),
+        ("0", "100%", "translateY(-100%)"),
+    ]
+    axis_ticks = "".join(
+        f'<div class="axis-tick" style="top:{top};transform:{transform}">{escape(label)}</div>'
+        for label, top, transform in tick_specs
+    )
+
+    chart_html = (
+        f'<div class="full-series-chart" style="grid-template-columns:repeat({count},minmax(0,1fr))">'
+        + "".join(columns)
+        + "</div>"
+    )
     return (
-        '<div class="progress">'
-        f'<div class="progress-fill" style="width:{pct:.2f}%"></div>'
-        f"{label_html}"
+        '<div class="series-shell">'
+        f'<div class="series-axis">{axis_ticks}</div>'
+        f'<div class="series-plot">{chart_html}</div>'
         "</div>"
     )
 
@@ -35,877 +127,588 @@ def metric_card(title: str, value: str, detail: str) -> str:
     )
 
 
-def chart_day_column(item: dict, maximum: int) -> str:
-    height = 10
-    if maximum > 0:
-        height = max(10, round((item["tokens"] / maximum) * 100))
-    label = item["day"][5:]
-    tooltip = f'{item["day"]}: {format_tokens(item["tokens"])}'
+def panel(title: str, subtitle: str, body: str, full_width: bool = False) -> str:
+    classes = ["panel"]
+    if full_width:
+        classes.append("panel-full")
+
     return (
-        '<div class="day-column">'
-        f'<div class="day-bar" title="{escape(tooltip)}">'
-        f'<div class="day-bar-fill" style="height:{height}%"></div>'
+        f'<article class="{" ".join(classes)}">'
+        '<div class="panel-header">'
+        f'<h2 class="panel-title">{escape(title)}</h2>'
+        f'<p class="panel-subtitle">{escape(subtitle)}</p>'
         "</div>"
-        f'<div class="day-label">{escape(label)}</div>'
+        + body
+        + "</article>"
+    )
+
+
+def panel_block(title: str, body: str, subtitle: str = "") -> str:
+    subtitle_html = ""
+    if subtitle:
+        subtitle_html = f'<p class="block-subtitle">{escape(subtitle)}</p>'
+
+    return (
+        '<section class="panel-block">'
+        f'<div class="block-title">{escape(title)}</div>'
+        f"{subtitle_html}"
+        + body
+        + "</section>"
+    )
+
+
+def render_summary_items(items: list[tuple[str, str]]) -> str:
+    rows = "".join(
+        '<div class="summary-item">'
+        f'<strong>{escape(label)}</strong>'
+        f'<span>{escape(value)}</span>'
+        "</div>"
+        for label, value in items
+    )
+    return f'<div class="summary-list">{rows}</div>'
+
+
+def render_spotlight(label: str, value: str, detail: str) -> str:
+    return (
+        '<div class="spotlight">'
+        f'<div class="spotlight-label">{escape(label)}</div>'
+        f'<div class="spotlight-value">{escape(value)}</div>'
+        f'<div class="spotlight-detail">{escape(detail)}</div>'
         "</div>"
     )
 
 
-def render_table(rows: list[str]) -> str:
-    return "<table>" + "".join(rows) + "</table>"
+def render_trend_stat(label: str, value: str, detail: str) -> str:
+    return (
+        '<div class="trend-stat">'
+        f'<div class="trend-label">{escape(label)}</div>'
+        f'<div class="trend-value">{escape(value)}</div>'
+        f'<div class="trend-detail">{escape(detail)}</div>'
+        "</div>"
+    )
 
 
-def provider_header(
-    stats: dict,
-    subtitle: str,
-    spend_label: str,
-) -> str:
-    pricing_label = stats["pricing"]["checked_at"] or stats["pricing"]["status_label"]
+def render_notes(notes: list[str]) -> str:
+    if not notes:
+        return ""
+
+    items = "".join(f'<li class="note-item">{escape(note)}</li>' for note in notes)
+    return (
+        '<details class="notes-details">'
+        '<summary class="notes-summary">Notes and caveats</summary>'
+        f'<ul class="notes-list">{items}</ul>'
+        "</details>"
+    )
+
+
+def top_value_item(items: list[dict], value_key: str) -> dict | None:
+    if not items:
+        return None
+    return max(items, key=lambda item: item.get(value_key, 0) or 0)
+
+
+def compact_path_label(label: str) -> str:
+    if label == "(unknown)" or not label.startswith("/"):
+        return label
+
+    path = Path(label)
+
+    try:
+        relative = path.relative_to(Path.home())
+    except ValueError:
+        return label
+
+    parts = relative.parts
+    if not parts:
+        return "~"
+    if len(parts) == 1:
+        return f"~/{parts[0]}"
+
+    return "~/" + "/".join(parts[-2:])
+
+
+def render_hero(dashboard: dict, output_path: Path) -> str:
+    providers = dashboard["providers"]
+    total_recorded = sum(stats["recorded_total"] for stats in providers)
+    total_sessions = sum(stats["session_count"] for stats in providers)
+    provider_names = ", ".join(stats["title"] for stats in providers)
+    codex_filter = "All sessions" if dashboard["include_temp"] else "Non-temp only"
+    output_label = dashboard.get("output_label") or display_path(output_path)
+
     return "\n".join(
         [
-            '<section class="panel provider-header-panel">',
-            '<div class="panel-header">',
-            "<div>",
-            f'<div class="eyebrow">{escape(stats["title"])}</div>',
-            f'<h2 class="panel-title">{escape(stats["title"])}</h2>',
-            f'<p class="panel-subtitle">{escape(subtitle)}</p>',
-            "</div>",
-            "</div>",
-            '<div class="provider-pills">',
-            f'<div class="pill">Window {escape(stats["window_start"])} to {escape(stats["window_end"])}</div>',
-            f'<div class="pill">Usage {escape(stats["usage_source_label"])}</div>',
-            f'<div class="pill">Source {escape(stats["source"])}</div>',
-            f'<div class="pill">Pricing {escape(pricing_label)}</div>',
-            f'<div class="pill">Spend {escape(spend_label)}</div>',
+            '<section class="hero">',
+            "<h1>Local AI Usage</h1>",
+            (
+                '<p class="hero-lede">'
+                f"{format_tokens(total_recorded)} recorded tokens across "
+                f"{format_int(total_sessions)} sessions from {escape(provider_names)}."
+                "</p>"
+            ),
+            '<div class="hero-meta">',
+            f'<div class="pill">Generated {escape(dashboard["generated_at"])}</div>',
+            f'<div class="pill">Codex {escape(codex_filter)}</div>',
+            f'<div class="pill">Output {escape(output_label)}</div>',
             "</div>",
             "</section>",
         ]
     )
 
 
-def render_provider_summary(provider_stats: list[dict]) -> str:
-    cards = []
+def render_provider_header(stats: dict, subtitle: str) -> str:
+    return (
+        f'<section class="provider-header provider-header-{escape(stats["provider_key"])}">'
+        f'<div class="eyebrow">{escape(stats["title"])}</div>'
+        f'<h2 class="provider-title">{escape(stats["title"])}</h2>'
+        f'<p class="provider-subtitle">{escape(subtitle)}</p>'
+        '<div class="provider-pills">'
+        f'<div class="pill">Window {escape(stats["window_start"])} -> {escape(stats["window_end"])}</div>'
+        f'<div class="pill">Source {escape(stats["source"])}</div>'
+        "</div>"
+        "</section>"
+    )
 
-    for stats in provider_stats:
-        spend_detail = "Spend visible" if stats.get("spend") else "Spend unavailable"
-        pricing_label = stats["pricing"]["checked_at"] or stats["pricing"]["status_label"]
-        cards.append(
-            metric_card(
-                stats["title"],
-                format_tokens(stats["recorded_total"]),
-                f"{format_int(stats['session_count'])} sessions • Pricing {pricing_label} • {spend_detail}",
+
+def render_openai_activity_panel(stats: dict) -> str:
+    peak_day = stats["top_days"][0] if stats["top_days"] else None
+    peak_hour = top_value_item(stats["hour_chart"], "tokens")
+
+    trend_html = (
+        '<div class="trend-grid">'
+        + render_trend_stat(
+            "7d tokens",
+            format_tokens(stats["last7_tokens"]),
+            f'{format_growth(stats["last7_tokens"], stats["prev7_tokens"])} vs previous 7d',
+        )
+        + render_trend_stat(
+            "7d sessions",
+            format_int(stats["last7_sessions"]),
+            f'{format_growth(stats["last7_sessions"], stats["prev7_sessions"])} vs previous 7d',
+        )
+        + render_trend_stat(
+            "Peak day",
+            format_tokens(peak_day["tokens"]) if peak_day else "n/a",
+            peak_day["day"] if peak_day else "No day-level data",
+        )
+        + render_trend_stat(
+            "Peak hour",
+            format_tokens(peak_hour["tokens"]) if peak_hour else "n/a",
+            peak_hour["label"] if peak_hour else "No hour-level data",
+        )
+        + "</div>"
+    )
+
+    return panel(
+        "Activity",
+        "Daily recorded tokens across the full local window.",
+        render_full_series_chart(stats["daily_series"]) + trend_html,
+        full_width=True,
+    )
+
+
+def render_distribution_panel(stats: dict, title: str, subtitle: str) -> str:
+    monthly_max = max((item["tokens"] for item in stats["monthly"]), default=0)
+    model_max = max((item["tokens"] for item in stats["top_models"]), default=0)
+    workspace_max = max((item["tokens"] for item in stats["top_workspaces"]), default=0)
+
+    monthly_items = [
+        {
+            "label": item["month"],
+            "tokens": item["tokens"],
+        }
+        for item in stats["monthly"]
+    ]
+
+    body = "".join(
+        [
+            panel_block(
+                "Monthly volume",
+                render_hbar_chart(monthly_items, "label", "tokens", format_tokens, monthly_max),
+                "Each month keeps its actual recorded total.",
+            ),
+            panel_block(
+                "Top models",
+                render_hbar_chart(stats["top_models"], "label", "tokens", format_tokens, model_max),
+                "Where the token volume is landing.",
+            ),
+            panel_block(
+                "Top workspaces",
+                render_hbar_chart(
+                    stats["top_workspaces"],
+                    "label",
+                    "tokens",
+                    format_tokens,
+                    workspace_max,
+                    label_format_fn=compact_path_label,
+                    row_class="workspace-row",
+                ),
+                "Projects driving the most local usage.",
+            ),
+        ]
+    )
+
+    return panel(title, subtitle, body)
+
+
+def render_openai_spend_panel(stats: dict) -> str:
+    spend = stats["spend"]
+
+    if spend:
+        current_month = spend["current_month"]
+        current_month_value = "n/a"
+        if current_month and current_month["projection"] is not None:
+            current_month_value = (
+                f'{format_currency(current_month["cost"])} so far, pacing '
+                f'{format_currency(current_month["projection"])}'
             )
+        elif current_month:
+            current_month_value = f'{format_currency(current_month["cost"])} so far'
+
+        items = [
+            ("Total", format_currency(spend["total_cost"])),
+            ("Current month", current_month_value),
+            ("Last 30 days", format_currency(spend["last30_cost"])),
+            ("Cache savings", format_currency(spend["cache_savings"])),
+        ]
+
+        spend_chart = panel_block(
+            "By model",
+            render_hbar_chart(
+                spend["models"],
+                "label",
+                "cost",
+                format_currency,
+                max((item["cost"] for item in spend["models"]), default=0),
+            ),
+            "Estimated from the live pricing refresh on this run.",
+        )
+    else:
+        items = [
+            ("Spend hidden", "This run could not refresh official pricing."),
+            ("Pricing status", stats["pricing"]["status_detail"]),
+        ]
+
+        spend_chart = panel_block(
+            "By model",
+            (
+                '<p class="muted-note">'
+                "Spend tables are intentionally omitted until pricing can be checked live. "
+                "Model spend will appear after a live pricing refresh."
+                "</p>"
+            ),
+            "This dashboard refuses to guess with stale prices.",
         )
 
-    return "\n".join(
-        [
-            '<section class="panel">',
-            '<div class="panel-header">',
-            "<div>",
-            '<h2 class="panel-title">Providers</h2>',
-            '<p class="panel-subtitle">Each provider keeps its own source, pricing status, and spend honesty.</p>',
-            "</div>",
-            "</div>",
-            f'<section class="grid provider-summary">{"".join(cards)}</section>',
-            "</section>",
-        ]
+    body = render_summary_items(items) + spend_chart
+
+    return panel(
+        "Spend",
+        "Estimated from live pricing when available.",
+        body,
     )
 
 
 def render_openai_section(stats: dict) -> str:
-    recent_max = max((item["tokens"] for item in stats["recent_14_days"]), default=0)
-    monthly_max = max((item["tokens"] for item in stats["monthly"]), default=0)
-    model_max = max((item["tokens"] for item in stats["top_models"]), default=0)
-    workspace_max = max((item["tokens"] for item in stats["top_workspaces"]), default=0)
-    hour_max = max((item["tokens"] for item in stats["top_hours"]), default=0)
-    weekday_max = max((item["tokens"] for item in stats["top_weekdays"]), default=0)
     spend = stats["spend"]
-    spend_model_max = max((item["cost"] for item in spend["models"]), default=0) if spend else 0
-
+    spend_value = "Unavailable"
+    spend_detail = "Live pricing refresh required"
     if spend:
-        spend_projection = spend["current_month"]["projection"] if spend["current_month"] else None
-        spend_detail = format_currency(spend_projection) + " projected this month" if spend_projection else "Published input/output pricing only"
-        spend_cards = [
-            metric_card("Est. Spend", format_currency(spend["total_cost"]), spend_detail),
-            metric_card("7d Spend", format_currency(spend["last7_cost"]), f"{format_growth(spend['last7_cost'], spend['prev7_cost'])} vs previous 7d"),
-            metric_card("Cache Savings", format_currency(spend["cache_savings"]), "Compared to charging all input at the full input rate"),
-            metric_card("Pricing", stats["pricing"]["status_label"], stats["pricing"]["status_detail"]),
-        ]
-    else:
-        spend_cards = [
-            metric_card("Est. Spend", "Unavailable", "Hidden until official pricing refresh succeeds on this run"),
-            metric_card("7d Spend", "Unavailable", "Live pricing is required before dollars are shown"),
-            metric_card("Cache Savings", "Unavailable", "This report does not reuse stale pricing for spend"),
-            metric_card("Pricing", stats["pricing"]["status_label"], stats["pricing"]["status_detail"]),
-        ]
+        spend_value = format_currency(spend["total_cost"])
+        if spend["current_month"] and spend["current_month"]["projection"] is not None:
+            spend_detail = f'Pacing {format_currency(spend["current_month"]["projection"])} this month'
+        elif spend["current_month"]:
+            spend_detail = f'{format_currency(spend["current_month"]["cost"])} so far this month'
 
-    hero_cards = [
-        metric_card("Recorded", format_tokens(stats["recorded_total"]), f"All-in {format_tokens(stats['all_in_total'])}"),
-        metric_card("Sessions", format_int(stats["session_count"]), f"{format_int(stats['temp_session_count'])} temp sessions excluded"),
-        metric_card("Cache Hit", format_pct(stats["cache_share"]), f"{format_tokens(stats['uncached_input_tokens'])} uncached input"),
-        metric_card("7d Tokens", format_tokens(stats["last7_tokens"]), f"{format_growth(stats['last7_tokens'], stats['prev7_tokens'])} vs previous 7d"),
-        *spend_cards,
+    cards = [
+        metric_card(
+            "Recorded",
+            format_tokens(stats["recorded_total"]),
+            f'All-in {format_tokens(stats["all_in_total"])}',
+        ),
+        metric_card(
+            "Sessions",
+            format_int(stats["session_count"]),
+            f'{format_int(stats["temp_session_count"])} temp excluded',
+        ),
+        metric_card(
+            "Cache hit",
+            format_pct(stats["cache_share"]),
+            f'{format_tokens(stats["uncached_input_tokens"])} uncached input',
+        ),
+        metric_card(
+            "Spend",
+            spend_value,
+            spend_detail,
+        ),
     ]
 
-    monthly_rows = []
-    for item in stats["monthly"]:
-        note = f"Projected {format_tokens(item['projection'])} at {format_tokens(item['daily_rate'])}/day" if item["projection"] else f"Cache {format_pct(item['cache_share'])}"
-        monthly_rows.append(
-            "<tr>"
-            f"<td>{escape(item['month'])}</td>"
-            f"<td>{format_int(item['sessions'])}</td>"
-            f"<td>{format_tokens(item['tokens'])}</td>"
-            f"<td>{format_pct(item['share'])}</td>"
-            f"<td>{render_progress(item['tokens'] / monthly_max if monthly_max else 0)}</td>"
-            f"<td>{escape(note)}</td>"
-            "</tr>"
-        )
-
-    if spend:
-        current_month = spend["current_month"]
-        if current_month and current_month["projection"] is not None:
-            current_month_detail = (
-                f"{format_currency(current_month['cost'])} so far, pacing {format_currency(current_month['projection'])}"
-            )
-        elif current_month:
-            current_month_detail = f"{format_currency(current_month['cost'])} so far"
-        else:
-            current_month_detail = "n/a"
-
-        long_context_detail = "No long-context pricing scenario available"
-        if spend["long_context_available"] and spend["total_long_cost"] is not None:
-            long_context_detail = (
-                f"{format_currency(spend['total_long_cost'])} if every gpt-5.4 session hit long-context pricing"
-            )
-
-        spend_summary_items = [
-            f'<div class="summary-item"><strong>Total</strong><span>{escape(format_currency(spend["total_cost"]))} based on published input and output rates.</span></div>',
-            f'<div class="summary-item"><strong>Last 7 days</strong><span>{escape(format_currency(spend["last7_cost"]))} across your most recent week of non-temp sessions.</span></div>',
-            f'<div class="summary-item"><strong>Last 30 days</strong><span>{escape(format_currency(spend["last30_cost"]))} from the latest rolling 30-day window.</span></div>',
-            f'<div class="summary-item"><strong>Current month</strong><span>{escape(current_month_detail)}.</span></div>',
-            f'<div class="summary-item"><strong>Cache savings</strong><span>{escape(format_currency(spend["cache_savings"]))} saved by cached input pricing.</span></div>',
-            f'<div class="summary-item"><strong>Long-context ceiling</strong><span>{escape(long_context_detail)}.</span></div>',
-        ]
-    else:
-        spend_summary_items = [
-            '<div class="summary-item"><strong>Spend hidden</strong><span>This run could not refresh official pricing, so the dashboard keeps dollar figures out of the report.</span></div>',
-            f'<div class="summary-item"><strong>Pricing status</strong><span>{escape(stats["pricing"]["status_detail"])}</span></div>',
-            f'<div class="summary-item"><strong>Snapshot path</strong><span><code>{escape(stats["pricing"]["snapshot_path"])}</code></span></div>',
-        ]
-
-    spend_model_rows = []
-    if spend:
-        for item in spend["models"]:
-            spend_model_rows.append(
-                "<tr>"
-                f"<td><code>{escape(item['label'])}</code></td>"
-                f"<td class=\"number\">{format_int(item['sessions'])}</td>"
-                f"<td class=\"number\">{format_currency(item['cost'])}</td>"
-                f"<td class=\"number\">{format_pct(item['share'])}</td>"
-                f"<td class=\"number\">{format_currency(item['cache_savings'])}</td>"
-                f"<td>{render_progress(item['cost'] / spend_model_max if spend_model_max else 0)}</td>"
-                "</tr>"
-            )
-
-    model_rows = []
-    for item in stats["top_models"]:
-        model_rows.append(
-            "<tr>"
-            f"<td><code>{escape(item['label'])}</code></td>"
-            f"<td>{format_int(item['sessions'])}</td>"
-            f"<td>{format_tokens(item['tokens'])}</td>"
-            f"<td>{format_pct(item['share'])}</td>"
-            f"<td>{render_progress(item['tokens'] / model_max if model_max else 0)}</td>"
-            "</tr>"
-        )
-
-    workspace_rows = []
-    for item in stats["top_workspaces"]:
-        workspace_rows.append(
-            "<tr>"
-            f"<td><code>{escape(item['label'])}</code></td>"
-            f"<td>{format_int(item['sessions'])}</td>"
-            f"<td>{format_tokens(item['tokens'])}</td>"
-            f"<td>{format_pct(item['share'])}</td>"
-            f"<td>{render_progress(item['tokens'] / workspace_max if workspace_max else 0)}</td>"
-            "</tr>"
-        )
-
-    hour_rows = []
-    for item in stats["top_hours"]:
-        hour_rows.append(
-            "<tr>"
-            f"<td>{escape(item['label'])}</td>"
-            f"<td>{format_int(item['sessions'])}</td>"
-            f"<td>{format_tokens(item['tokens'])}</td>"
-            f"<td>{render_progress(item['tokens'] / hour_max if hour_max else 0)}</td>"
-            "</tr>"
-        )
-
-    weekday_rows = []
-    for item in stats["top_weekdays"]:
-        weekday_rows.append(
-            "<tr>"
-            f"<td>{escape(item['label'])}</td>"
-            f"<td>{format_int(item['sessions'])}</td>"
-            f"<td>{format_tokens(item['tokens'])}</td>"
-            f"<td>{render_progress(item['tokens'] / weekday_max if weekday_max else 0)}</td>"
-            "</tr>"
-        )
-
-    top_day_rows = []
-    for item in stats["top_days"]:
-        top_day_rows.append(
-            "<tr>"
-            f"<td>{escape(item['day'])}</td>"
-            f"<td>{format_int(item['sessions'])}</td>"
-            f"<td>{format_tokens(item['tokens'])}</td>"
-            "</tr>"
-        )
-
-    session_rows = []
-    for item in stats["largest_sessions"]:
-        session_rows.append(
-            "<tr>"
-            f"<td>{escape(item['start'])}</td>"
-            f"<td><code>{escape(item['workspace'])}</code></td>"
-            f"<td><code>{escape(item['model'])}</code></td>"
-            f"<td>{format_tokens(item['tokens'])}</td>"
-            f"<td>{escape(item['duration'])}</td>"
-            "</tr>"
-        )
-
-    notes = list(stats["notes"])
-
-    recent_chart = "".join(chart_day_column(item, recent_max) for item in stats["recent_14_days"])
-
-    parts = [
-        provider_header(
+    section_parts = [
+        render_provider_header(
             stats,
-            "Local Codex usage with live-priced spend only. If official docs fail on this run, dollars stay hidden.",
-            "Visible" if spend else "Hidden",
+            "Local Codex session logs.",
         ),
-        f'<section class="grid metrics">{"".join(hero_cards)}</section>',
-        '<section class="grid two-up">',
-        '<article class="panel">',
-        '<div class="panel-header">',
-        '<div>',
-        '<h2 class="panel-title">Trend</h2>',
-        '<p class="panel-subtitle">Fourteen days of daily tokens, plus the short-term movement that actually matters.</p>',
-        "</div>",
-        "</div>",
-        f'<div class="day-chart">{recent_chart}</div>',
-        '<div class="trend-grid">',
-        '<div class="trend-stat"><div class="trend-label">7d tokens</div>'
-        f'<div class="trend-value">{escape(format_tokens(stats["last7_tokens"]))}</div>'
-        f'<div class="trend-detail">{escape(format_growth(stats["last7_tokens"], stats["prev7_tokens"]))} vs previous 7 days</div></div>',
-        '<div class="trend-stat"><div class="trend-label">7d sessions</div>'
-        f'<div class="trend-value">{escape(format_int(stats["last7_sessions"]))}</div>'
-        f'<div class="trend-detail">{escape(format_growth(stats["last7_sessions"], stats["prev7_sessions"]))} vs previous 7 days</div></div>',
-        '<div class="trend-stat"><div class="trend-label">30d footprint</div>'
-        f'<div class="trend-value">{escape(format_tokens(stats["last30_tokens"]))}</div>'
-        f'<div class="trend-detail">{escape(format_pct(stats["last30_share"]))} of lifetime non-temp usage</div></div>',
-        '<div class="trend-stat"><div class="trend-label">Temp share</div>'
-        f'<div class="trend-value">{escape(format_pct(stats["temp_share"]))}</div>'
-        f'<div class="trend-detail">{escape(format_int(stats["temp_session_count"]))} temp sessions excluded</div></div>',
-        "</div>",
-        "</article>",
-        '<article class="panel">',
-        '<div class="panel-header">',
-        '<div>',
-        '<h2 class="panel-title">Highlights</h2>',
-        '<p class="panel-subtitle">Short reads, not a wall of explanation.</p>',
-        "</div>",
-        "</div>",
-        '<div class="summary-list">',
-        f'<div class="summary-item"><strong>Messages</strong><span>{escape(format_int(stats["user_messages"]))} user, {escape(format_int(stats["assistant_messages"]))} assistant, {escape(format_int(stats["reasoning_messages"]))} reasoning summaries.</span></div>',
-        f'<div class="summary-item"><strong>Per session</strong><span>{escape(format_tokens(stats["avg_session_tokens"]))} average, {escape(format_tokens(stats["median_session_tokens"]))} median, {escape(format_tokens(stats["p90_session_tokens"]))} p90.</span></div>',
-        f'<div class="summary-item"><strong>Session duration</strong><span>{escape(format_duration(stats["avg_duration"]))} average, {escape(format_duration(stats["median_duration"]))} median.</span></div>',
-        f'<div class="summary-item"><strong>Peak day</strong><span>{escape(stats["top_days"][0]["day"])} at {escape(format_tokens(stats["top_days"][0]["tokens"]))}.</span></div>',
-        f'<div class="summary-item"><strong>Top model</strong><span><code>{escape(stats["top_models"][0]["label"])}</code> at {escape(format_tokens(stats["top_models"][0]["tokens"]))}, {escape(format_pct(stats["top_models"][0]["share"]))} of total usage.</span></div>',
-        f'<div class="summary-item"><strong>Top workspace</strong><span><code>{escape(stats["top_workspaces"][0]["label"])}</code> at {escape(format_tokens(stats["top_workspaces"][0]["tokens"]))} across {escape(format_int(stats["top_workspaces"][0]["sessions"]))} sessions.</span></div>',
-        "</div>",
-        "</article>",
-        "</section>",
-        '<section class="grid two-up">',
-        '<article class="panel">',
-        '<div class="panel-header">',
-        '<div>',
-        '<h2 class="panel-title">Spend</h2>',
-        '<p class="panel-subtitle">Live-priced only. If the official docs were not reachable on this run, dollars stay hidden.</p>',
-        "</div>",
-        "</div>",
-        '<div class="summary-list">',
-        "".join(spend_summary_items),
-        "</div>",
-        "</article>",
-        '<article class="panel">',
-        '<div class="panel-header">',
-        '<div>',
-        '<h2 class="panel-title">Model Spend</h2>',
-        '<p class="panel-subtitle">Estimated cost by model using the latest verified pricing snapshot.</p>',
-        "</div>",
-        "</div>",
-        (
-            render_table(
-                [
-                    "<thead><tr><th>Model</th><th class=\"number\">Sessions</th><th class=\"number\">Spend</th><th class=\"number\">Share</th><th class=\"number\">Cache Saved</th><th>Shape</th></tr></thead>",
-                    f"<tbody>{''.join(spend_model_rows)}</tbody>",
-                ]
-            )
-            if spend
-            else '<div class="note">Spend tables are intentionally omitted until pricing can be checked live again.</div>'
+        f'<div class="grid metrics">{"".join(cards)}</div>',
+        render_openai_activity_panel(stats),
+        '<div class="grid two-up">',
+        render_distribution_panel(
+            stats,
+            "Volume Breakdown",
+            "Monthly totals, model mix, and workspace concentration in one place.",
         ),
-        "</article>",
-        "</section>",
-        '<section class="grid two-up">',
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Monthly</h2><p class="panel-subtitle">Month-over-month volume with projection for the current month.</p></div></div>',
-        render_table(
-            [
-                "<thead><tr><th>Month</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th><th class=\"number\">Share</th><th>Shape</th><th>Note</th></tr></thead>",
-                f"<tbody>{''.join(monthly_rows)}</tbody>",
-            ]
-        ),
-        "</article>",
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Model Mix</h2><p class="panel-subtitle">Where the token volume is actually landing.</p></div></div>',
-        render_table(
-            [
-                "<thead><tr><th>Model</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th><th class=\"number\">Share</th><th>Shape</th></tr></thead>",
-                f"<tbody>{''.join(model_rows)}</tbody>",
-            ]
-        ),
-        "</article>",
-        "</section>",
-        '<section class="grid two-up">',
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Workspace Mix</h2><p class="panel-subtitle">The few workspaces dominating your spend and attention.</p></div></div>',
-        render_table(
-            [
-                "<thead><tr><th>Workspace</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th><th class=\"number\">Share</th><th>Shape</th></tr></thead>",
-                f"<tbody>{''.join(workspace_rows)}</tbody>",
-            ]
-        ),
-        "</article>",
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Timing</h2><p class="panel-subtitle">Top hours and weekdays by total token volume.</p></div></div>',
-        '<div class="grid" style="grid-template-columns: 1fr; gap: 16px; margin-top: 0;">',
-        render_table(
-            [
-                "<thead><tr><th>Hour</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th><th>Shape</th></tr></thead>",
-                f"<tbody>{''.join(hour_rows)}</tbody>",
-            ]
-        ),
-        render_table(
-            [
-                "<thead><tr><th>Day</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th><th>Shape</th></tr></thead>",
-                f"<tbody>{''.join(weekday_rows)}</tbody>",
-            ]
-        ),
+        render_openai_spend_panel(stats),
         "</div>",
-        "</article>",
-        "</section>",
-        '<section class="grid two-up">',
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Top Days</h2><p class="panel-subtitle">Single-day spikes worth remembering.</p></div></div>',
-        render_table(
-            [
-                "<thead><tr><th>Day</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th></tr></thead>",
-                f"<tbody>{''.join(top_day_rows)}</tbody>",
-            ]
-        ),
-        "</article>",
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Largest Sessions</h2><p class="panel-subtitle">The few sessions doing disproportionate work.</p></div></div>',
-        render_table(
-            [
-                "<thead><tr><th>Start</th><th>Workspace</th><th>Model</th><th class=\"number\">Tokens</th><th class=\"number\">Duration</th></tr></thead>",
-                f"<tbody>{''.join(session_rows)}</tbody>",
-            ]
-        ),
-        "</article>",
-        "</section>",
-        '<section class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Notes</h2><p class="panel-subtitle">A few precise caveats so the numbers stay honest.</p></div></div>',
-        '<div class="notes">',
-        "".join(f'<div class="note">{escape(note)}</div>' for note in notes),
-        "</div>",
-        "</section>",
+        render_notes(stats["notes"]),
     ]
 
-    return "\n".join(parts)
+    return "\n".join(section_parts)
+
+
+def render_claude_activity_panel(stats: dict) -> str:
+    peak_day = stats["top_days"][0] if stats["top_days"] else None
+    coverage_share = stats["enriched_token_sessions"] / stats["session_count"] if stats["session_count"] else 0
+
+    trend_html = (
+        '<div class="trend-grid">'
+        + render_trend_stat(
+            "7d tokens",
+            format_tokens(stats["last7_tokens"]),
+            f'{format_growth(stats["last7_tokens"], stats["prev7_tokens"])} vs previous 7d',
+        )
+        + render_trend_stat(
+            "7d sessions",
+            format_int(stats["last7_sessions"]),
+            f'{format_growth(stats["last7_sessions"], stats["prev7_sessions"])} vs previous 7d',
+        )
+        + render_trend_stat(
+            "Peak day",
+            format_tokens(peak_day["tokens"]) if peak_day else "n/a",
+            peak_day["day"] if peak_day else "No day-level data",
+        )
+        + render_trend_stat(
+            "Transcript matched",
+            format_pct(coverage_share),
+            f'{format_int(stats["enriched_token_sessions"])} of {format_int(stats["session_count"])} sessions',
+        )
+        + "</div>"
+    )
+
+    return panel(
+        "Activity",
+        "Daily recorded tokens across the observed Claude window.",
+        render_full_series_chart(stats["daily_series"]) + trend_html,
+        full_width=True,
+    )
+
+
+def render_claude_coverage_panel(stats: dict) -> str:
+    coverage_share = stats["enriched_token_sessions"] / stats["session_count"] if stats["session_count"] else 0
+    cache_share = stats["cache_observed_sessions"] / stats["session_count"] if stats["session_count"] else 0
+
+    summary_items = [
+        (
+            "Matched transcripts",
+            f'{format_int(stats["enriched_token_sessions"])} sessions used transcript-level API tokens.',
+        ),
+        (
+            "Metadata only",
+            f'{format_int(stats["session_count"] - stats["enriched_token_sessions"])} sessions rely on session-meta totals only.',
+        ),
+        (
+            "Unknown model",
+            f'{format_int(stats["unknown_model_sessions"])} sessions had no matched transcript with a model name.',
+        ),
+        (
+            "Partial parse",
+            f'{format_int(stats["partial_parse_sessions"])} truncated metadata files were recovered by field extraction.',
+        ),
+        (
+            "Cache fields",
+            f'{format_int(stats["cache_observed_sessions"])} sessions exposed Claude cache tokens ({format_pct(cache_share)}).',
+        ),
+        (
+            "Spend Unavailable",
+            "Claude dollars are intentionally omitted in v1.",
+        ),
+    ]
+
+    body = (
+        render_spotlight(
+            "Transcript matched",
+            format_pct(coverage_share),
+            "Share of sessions upgraded from metadata totals to transcript-level API token data.",
+        )
+        + render_summary_items(summary_items)
+        + '<p class="muted-note" style="margin-top:14px">This dashboard does not claim billable Claude dollars in v1.</p>'
+    )
+
+    return panel(
+        "Coverage",
+        "How much of Claude usage comes from matched transcripts versus metadata only.",
+        body,
+    )
 
 
 def render_claude_section(stats: dict) -> str:
-    recent_max = max((item["tokens"] for item in stats["recent_14_days"]), default=0)
-    model_max = max((item["tokens"] for item in stats["top_models"]), default=0)
-    workspace_max = max((item["tokens"] for item in stats["top_workspaces"]), default=0)
-    recent_chart = "".join(chart_day_column(item, recent_max) for item in stats["recent_14_days"])
+    coverage_share = stats["enriched_token_sessions"] / stats["session_count"] if stats["session_count"] else 0
 
-    cache_value = "Unavailable"
-    cache_detail = "No Claude cache fields were observed in matched transcripts"
-    if stats["cache_observed"]:
-        cache_value = format_tokens(stats["cache_read_input_tokens"])
-        cache_detail = f"{format_tokens(stats['cache_creation_input_tokens'])} cache creation tokens observed"
-
-    hero_cards = [
-        metric_card("Recorded", format_tokens(stats["recorded_total"]), f"Input {format_tokens(stats['input_tokens'])} • Output {format_tokens(stats['output_tokens'])}"),
-        metric_card("Sessions", format_int(stats["session_count"]), f"{stats['window_start']} to {stats['window_end']}"),
-        metric_card("Cache Read", cache_value, cache_detail),
-        metric_card("Spend", "Unavailable", "This dashboard does not claim billable Claude dollars in v1"),
+    cards = [
+        metric_card(
+            "Recorded",
+            format_tokens(stats["recorded_total"]),
+            f'Input {format_tokens(stats["input_tokens"])} | Output {format_tokens(stats["output_tokens"])}',
+        ),
+        metric_card(
+            "Sessions",
+            format_int(stats["session_count"]),
+            f'{stats["window_start"]} -> {stats["window_end"]}',
+        ),
+        metric_card(
+            "Cache read",
+            format_tokens(stats["cache_read_input_tokens"]) if stats["cache_observed"] else "Unavailable",
+            (
+                f'{format_tokens(stats["cache_creation_input_tokens"])} cache creation tokens'
+                if stats["cache_observed"]
+                else "No cache fields observed in matched transcripts"
+            ),
+        ),
+        metric_card(
+            "Transcript matched",
+            format_pct(coverage_share),
+            f'{format_int(stats["enriched_token_sessions"])} of {format_int(stats["session_count"])} sessions',
+        ),
     ]
 
-    model_rows = []
-    for item in stats["top_models"]:
-        model_rows.append(
-            "<tr>"
-            f"<td><code>{escape(item['label'])}</code></td>"
-            f"<td class=\"number\">{format_int(item['sessions'])}</td>"
-            f"<td class=\"number\">{format_tokens(item['tokens'])}</td>"
-            f"<td class=\"number\">{format_pct(item['share'])}</td>"
-            f"<td>{render_progress(item['tokens'] / model_max if model_max else 0)}</td>"
-            "</tr>"
-        )
-
-    workspace_rows = []
-    for item in stats["top_workspaces"]:
-        workspace_rows.append(
-            "<tr>"
-            f"<td><code>{escape(item['label'])}</code></td>"
-            f"<td class=\"number\">{format_int(item['sessions'])}</td>"
-            f"<td class=\"number\">{format_tokens(item['tokens'])}</td>"
-            f"<td class=\"number\">{format_pct(item['share'])}</td>"
-            f"<td>{render_progress(item['tokens'] / workspace_max if workspace_max else 0)}</td>"
-            "</tr>"
-        )
-
-    parts = [
-        provider_header(
+    section_parts = [
+        render_provider_header(
             stats,
-            "Local Claude usage from your machine. Spend is intentionally hidden until billing semantics are trustworthy.",
-            "Unavailable",
+            "Local Claude session metadata with transcript enrichment when a matching project log exists.",
         ),
-        f'<section class="grid metrics">{"".join(hero_cards)}</section>',
-        '<section class="grid two-up">',
-        '<article class="panel">',
-        '<div class="panel-header">',
-        '<div>',
-        '<h2 class="panel-title">Recent Activity</h2>',
-        '<p class="panel-subtitle">Fourteen days of recorded Claude tokens, with short-term movement kept simple.</p>',
-        "</div>",
-        "</div>",
-        f'<div class="day-chart">{recent_chart}</div>',
-        '<div class="trend-grid">',
-        '<div class="trend-stat"><div class="trend-label">7d tokens</div>'
-        f'<div class="trend-value">{escape(format_tokens(stats["last7_tokens"]))}</div>'
-        f'<div class="trend-detail">{escape(format_growth(stats["last7_tokens"], stats["prev7_tokens"]))} vs previous 7 days</div></div>',
-        '<div class="trend-stat"><div class="trend-label">7d sessions</div>'
-        f'<div class="trend-value">{escape(format_int(stats["last7_sessions"]))}</div>'
-        f'<div class="trend-detail">{escape(format_growth(stats["last7_sessions"], stats["prev7_sessions"]))} vs previous 7 days</div></div>',
-        '<div class="trend-stat"><div class="trend-label">30d footprint</div>'
-        f'<div class="trend-value">{escape(format_tokens(stats["last30_tokens"]))}</div>'
-        f'<div class="trend-detail">{escape(format_pct(stats["last30_share"]))} of recorded Claude usage</div></div>',
-        '<div class="trend-stat"><div class="trend-label">Active streak</div>'
-        f'<div class="trend-value">{escape(format_int(stats["streak_current"]))}</div>'
-        f'<div class="trend-detail">Longest streak {escape(format_int(stats["streak_longest"]))} days</div></div>',
-        "</div>",
-        "</article>",
-        '<article class="panel">',
-        '<div class="panel-header">',
-        '<div>',
-        '<h2 class="panel-title">Highlights</h2>',
-        '<p class="panel-subtitle">Usage first. No invented dollars.</p>',
-        "</div>",
-        "</div>",
-        '<div class="summary-list">',
-        f'<div class="summary-item"><strong>Messages</strong><span>{escape(format_int(stats["user_messages"]))} user and {escape(format_int(stats["assistant_messages"]))} assistant messages.</span></div>',
-        f'<div class="summary-item"><strong>Per session</strong><span>{escape(format_tokens(stats["avg_session_tokens"]))} average, {escape(format_tokens(stats["median_session_tokens"]))} median, {escape(format_tokens(stats["p90_session_tokens"]))} p90.</span></div>',
-        f'<div class="summary-item"><strong>Session duration</strong><span>{escape(format_duration(stats["avg_duration"]))} average, {escape(format_duration(stats["median_duration"]))} median.</span></div>',
-        f'<div class="summary-item"><strong>Peak day</strong><span>{escape(stats["top_days"][0]["day"])} at {escape(format_tokens(stats["top_days"][0]["tokens"]))}.</span></div>',
-        f'<div class="summary-item"><strong>Top model</strong><span><code>{escape(stats["top_models"][0]["label"])}</code> at {escape(format_tokens(stats["top_models"][0]["tokens"]))}, {escape(format_pct(stats["top_models"][0]["share"]))} of recorded Claude usage.</span></div>',
-        f'<div class="summary-item"><strong>Top workspace</strong><span><code>{escape(stats["top_workspaces"][0]["label"])}</code> at {escape(format_tokens(stats["top_workspaces"][0]["tokens"]))} across {escape(format_int(stats["top_workspaces"][0]["sessions"]))} sessions.</span></div>',
-        "</div>",
-        "</article>",
-        "</section>",
-        '<section class="grid two-up">',
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Model Mix</h2><p class="panel-subtitle">Model identity comes from matched Claude transcripts when present.</p></div></div>',
-        render_table(
-            [
-                "<thead><tr><th>Model</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th><th class=\"number\">Share</th><th>Shape</th></tr></thead>",
-                f"<tbody>{''.join(model_rows)}</tbody>",
-            ]
+        f'<div class="grid metrics">{"".join(cards)}</div>',
+        render_claude_activity_panel(stats),
+        '<div class="grid two-up">',
+        render_distribution_panel(
+            stats,
+            "Volume Breakdown",
+            "Monthly totals, model mix, and workspace concentration without claiming unsupported dollars.",
         ),
-        "</article>",
-        '<article class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Workspace Mix</h2><p class="panel-subtitle">The projects where Claude usage actually landed.</p></div></div>',
-        render_table(
-            [
-                "<thead><tr><th>Workspace</th><th class=\"number\">Sessions</th><th class=\"number\">Tokens</th><th class=\"number\">Share</th><th>Shape</th></tr></thead>",
-                f"<tbody>{''.join(workspace_rows)}</tbody>",
-            ]
-        ),
-        "</article>",
-        "</section>",
-        '<section class="panel">',
-        '<div class="panel-header"><div><h2 class="panel-title">Notes</h2><p class="panel-subtitle">Blunt caveats so the Claude numbers stay honest.</p></div></div>',
-        '<div class="notes">',
-        "".join(f'<div class="note">{escape(note)}</div>' for note in stats["notes"]),
+        render_claude_coverage_panel(stats),
         "</div>",
-        "</section>",
+        render_notes(stats["notes"]),
     ]
 
-    return "\n".join(parts)
+    return "\n".join(section_parts)
 
 
 def render_page_notes(notes: list[str]) -> str:
     if not notes:
         return ""
 
-    return "\n".join(
-        [
-            '<section class="panel">',
-            '<div class="panel-header"><div><h2 class="panel-title">Page Notes</h2><p class="panel-subtitle">Provider omissions and whole-page caveats.</p></div></div>',
-            '<div class="notes">',
-            "".join(f'<div class="note">{escape(note)}</div>' for note in notes),
-            "</div>",
-            "</section>",
-        ]
+    return panel(
+        "Page Notes",
+        "Whole-report caveats and provider omissions.",
+        render_notes(notes),
     )
 
 
-def render_html(dashboard: dict, output_path: Path) -> str:
-    provider_names = ", ".join(provider["title"] for provider in dashboard["providers"])
-    page_notes = render_page_notes(dashboard["page_notes"])
+_CSS = """
+:root { --bg:#efe6da; --panel:rgba(255,252,247,.94); --panel-strong:#f8f1e6; --text:#1f1a14; --muted:#64594c; --border:rgba(86,67,44,.14); --accent:#1f6b72; --accent-soft:rgba(31,107,114,.12); --accent-claude:#8b6844; --shadow:0 12px 40px rgba(55,39,25,.08); }
+* { box-sizing:border-box; }
+body { margin:0; background:radial-gradient(circle at top left, rgba(31,107,114,.18), transparent 28%), radial-gradient(circle at top right, rgba(139,104,68,.14), transparent 24%), linear-gradient(180deg, #f7f1e8 0%, var(--bg) 38%, #f3ecdf 100%); color:var(--text); font-family:"Avenir Next","Segoe UI","Helvetica Neue",sans-serif; font-size:15px; line-height:1.5; }
+h1, h2, h3 { font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",serif; font-weight:600; letter-spacing:-.03em; margin:0; }
+p { margin:0; }
+code { font-family:"SFMono-Regular",Menlo,Consolas,monospace; font-size:.9em; background:#efe6da; padding:.12rem .34rem; border-radius:4px; }
+.page { max-width:1180px; margin:0 auto; padding:30px 20px 72px; }
+.hero { border:1px solid var(--border); border-radius:24px; background:linear-gradient(135deg, rgba(255,255,255,.9), rgba(250,245,237,.96)), var(--panel); box-shadow:var(--shadow); padding:26px 28px; }
+.eyebrow { color:var(--accent); font-size:.72rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin-bottom:12px; }
+.hero h1 { font-size:clamp(2.2rem, 4vw, 3.8rem); line-height:.96; max-width:700px; }
+.hero-lede { color:var(--muted); font-size:1rem; line-height:1.65; max-width:760px; margin-top:10px; }
+.hero-meta, .provider-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+.pill { padding:7px 12px; border-radius:999px; border:1px solid var(--border); background:rgba(255,250,243,.86); color:var(--muted); font-size:.86rem; }
+.metric-card, .panel { border:1px solid var(--border); background:var(--panel); box-shadow:var(--shadow); }
+.metric-title, .trend-label, .block-title, .summary-item strong, .spotlight-label { color:var(--muted); font-size:.74rem; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+.provider-header { margin-top:30px; border:1px solid var(--border); border-radius:22px; background:var(--panel); box-shadow:var(--shadow); padding:22px 24px 20px; }
+.provider-header-openai { background:linear-gradient(135deg, rgba(31,107,114,.08), transparent 45%), var(--panel); }
+.provider-header-claude { background:linear-gradient(135deg, rgba(139,104,68,.08), transparent 45%), var(--panel); }
+.provider-title { font-size:2rem; margin-bottom:6px; }
+.provider-subtitle { color:var(--muted); max-width:900px; font-size:.95rem; }
+.grid { display:grid; gap:16px; margin-top:16px; }
+.metrics { grid-template-columns:repeat(4, minmax(0,1fr)); }
+.two-up { grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr); }
+.metric-card { border-radius:18px; padding:18px; min-height:118px; }
+.metric-value { font-size:1.72rem; line-height:1; margin-top:12px; }
+.metric-detail { color:var(--muted); font-size:.9rem; line-height:1.45; margin-top:10px; }
+.panel { border-radius:20px; padding:22px; }
+.panel-full { grid-column:1 / -1; }
+.panel-header { margin-bottom:16px; }
+.panel-title { font-size:1.35rem; }
+.panel-subtitle { color:var(--muted); font-size:.92rem; line-height:1.55; margin-top:4px; }
+.panel-block + .panel-block { margin-top:20px; padding-top:18px; border-top:1px solid var(--border); }
+.block-subtitle { color:var(--muted); font-size:.88rem; line-height:1.5; margin:8px 0 12px; }
+.spotlight { padding:16px 18px; border:1px solid var(--border); border-radius:16px; background:linear-gradient(135deg, var(--accent-soft), transparent 80%), var(--panel-strong); margin-bottom:16px; }
+.spotlight-value { font-size:1.9rem; line-height:1; margin-top:8px; }
+.spotlight-detail { color:var(--muted); font-size:.9rem; line-height:1.5; margin-top:8px; }
+.summary-list { display:grid; gap:10px; }
+.summary-item { display:grid; gap:5px; padding:12px 14px; border:1px solid var(--border); border-radius:14px; background:var(--panel-strong); }
+.summary-item span { font-size:.92rem; line-height:1.5; }
+.series-shell { display:grid; grid-template-columns:56px 1fr; gap:10px; align-items:start; }
+.series-axis { position:relative; height:170px; }
+.axis-tick { position:absolute; right:0; color:var(--muted); font-size:.72rem; line-height:1; }
+.axis-tick::after { content:""; position:absolute; top:50%; left:calc(100% + 6px); width:8px; border-top:1px solid var(--border); }
+.series-plot { min-width:0; }
+.full-series-chart { display:grid; gap:2px; align-items:end; height:200px; }
+.series-col { display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:4px; min-width:0; }
+.series-bar { position:relative; width:100%; height:170px; border-radius:6px 6px 0 0; background:#ebdfd0; overflow:hidden; }
+.series-fill { position:absolute; inset:auto 0 0; width:100%; background:linear-gradient(180deg, #76a4aa 0%, var(--accent) 100%); }
+.series-label { color:var(--muted); font-size:.68rem; font-variant-numeric:tabular-nums; }
+.trend-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px; margin-top:16px; }
+.trend-stat { padding:12px 14px; border:1px solid var(--border); border-radius:14px; background:var(--panel-strong); }
+.trend-value { font-size:1.2rem; margin-top:8px; }
+.trend-detail { color:var(--muted); font-size:.86rem; line-height:1.45; margin-top:6px; }
+.hbar-chart { display:grid; gap:8px; }
+.hbar-row { display:grid; grid-template-columns:180px 1fr 86px; gap:10px; align-items:center; }
+.hbar-label, .hbar-value { font-size:.86rem; font-variant-numeric:tabular-nums; }
+.hbar-label { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.workspace-row { grid-template-columns:230px 1fr 86px; align-items:start; }
+.workspace-row .hbar-label { white-space:normal; overflow:visible; text-overflow:clip; line-height:1.35; }
+.hbar-track { height:18px; border-radius:999px; background:#eadfce; overflow:hidden; }
+.hbar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg, #8db5ba 0%, var(--accent) 100%); }
+.hbar-value { text-align:right; }
+.muted-note { color:var(--muted); font-size:.92rem; line-height:1.6; }
+.notes-details { margin-top:16px; border:1px solid var(--border); border-radius:16px; background:var(--panel-strong); overflow:hidden; }
+.notes-summary { cursor:pointer; padding:12px 16px; color:var(--muted); font-size:.88rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; list-style:none; }
+.notes-summary::-webkit-details-marker { display:none; }
+.notes-summary::before { content:"+ "; }
+details[open] .notes-summary::before { content:"- "; }
+.notes-list { margin:0; padding:4px 18px 16px 32px; display:grid; gap:8px; }
+.note-item { color:var(--muted); font-size:.9rem; line-height:1.55; }
+@media (max-width:1040px) { .two-up { grid-template-columns:1fr; } .metrics, .trend-grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+@media (max-width:760px) { .page { padding:16px 12px 48px; } .hero, .provider-header, .panel { padding:18px; } .metrics, .trend-grid { grid-template-columns:1fr; } .series-shell { grid-template-columns:40px 1fr; gap:8px; } .hbar-row, .workspace-row { grid-template-columns:110px 1fr 72px; } .full-series-chart { height:160px; } .series-axis, .series-bar { height:132px; } .hero h1 { font-size:2.5rem; } }
+"""
 
-    parts = [
+
+def render_html(dashboard: dict, output_path: Path) -> str:
+    page_notes_html = render_page_notes(dashboard["page_notes"])
+
+    body_parts: list[str] = [
         "<!doctype html>",
         '<html lang="en">',
         "<head>",
         '<meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1">',
         "<title>Local AI Usage Dashboard</title>",
-        "<style>",
-        """
-        :root {
-          --bg: #f4efe8;
-          --panel: #fffdfa;
-          --panel-strong: #f8f4ee;
-          --text: #1c1a17;
-          --muted: #6a6258;
-          --border: #ded4c8;
-          --accent: #325f64;
-          --accent-soft: #dbe8e9;
-          --positive: #2c6a50;
-          --shadow: 0 8px 24px rgba(36, 31, 25, 0.06);
-        }
-
-        * { box-sizing: border-box; }
-        body {
-          margin: 0;
-          background:
-            radial-gradient(circle at top left, rgba(50, 95, 100, 0.08), transparent 30%),
-            linear-gradient(180deg, #f7f2eb 0%, var(--bg) 100%);
-          color: var(--text);
-          font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
-        }
-        h1, h2, h3 {
-          font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-          font-weight: 600;
-          letter-spacing: -0.02em;
-          margin: 0;
-        }
-        p { margin: 0; }
-        code {
-          font-family: "SFMono-Regular", Menlo, Consolas, monospace;
-          font-size: 0.92em;
-          background: #f3ede6;
-          padding: 0.15rem 0.35rem;
-          border-radius: 0.35rem;
-        }
-        .page {
-          max-width: 1180px;
-          margin: 0 auto;
-          padding: 28px 20px 60px;
-        }
-        .hero {
-          padding: 28px;
-          border: 1px solid var(--border);
-          border-radius: 24px;
-          background: linear-gradient(180deg, rgba(255,255,255,0.72), rgba(255,253,250,0.95));
-          box-shadow: var(--shadow);
-        }
-        .eyebrow {
-          color: var(--accent);
-          font-size: 0.78rem;
-          font-weight: 700;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          margin-bottom: 10px;
-        }
-        .hero h1 {
-          font-size: clamp(2.2rem, 4vw, 3.6rem);
-          line-height: 0.98;
-          margin-bottom: 12px;
-        }
-        .hero-copy {
-          color: var(--muted);
-          max-width: 760px;
-          line-height: 1.55;
-          font-size: 1rem;
-        }
-        .hero-meta,
-        .provider-pills {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          margin-top: 18px;
-        }
-        .pill {
-          padding: 8px 12px;
-          border-radius: 999px;
-          background: var(--panel-strong);
-          border: 1px solid var(--border);
-          color: var(--muted);
-          font-size: 0.9rem;
-        }
-        .grid {
-          display: grid;
-          gap: 18px;
-          margin-top: 22px;
-        }
-        .metrics {
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-        }
-        .provider-summary {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          margin-top: 0;
-        }
-        .two-up {
-          grid-template-columns: 1.35fr 1fr;
-        }
-        .metric-card,
-        .panel {
-          background: var(--panel);
-          border: 1px solid var(--border);
-          border-radius: 20px;
-          box-shadow: var(--shadow);
-        }
-        .metric-card {
-          padding: 18px 18px 16px;
-          min-height: 128px;
-        }
-        .provider-header-panel {
-          margin-top: 22px;
-        }
-        .metric-title {
-          color: var(--muted);
-          font-size: 0.85rem;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          margin-bottom: 14px;
-        }
-        .metric-value {
-          font-size: 1.75rem;
-          line-height: 1;
-          margin-bottom: 10px;
-        }
-        .metric-detail {
-          color: var(--muted);
-          line-height: 1.45;
-          font-size: 0.95rem;
-        }
-        .panel {
-          padding: 22px;
-        }
-        .panel-header {
-          display: flex;
-          align-items: flex-end;
-          justify-content: space-between;
-          gap: 16px;
-          margin-bottom: 16px;
-        }
-        .panel-title {
-          font-size: 1.45rem;
-        }
-        .panel-subtitle {
-          color: var(--muted);
-          font-size: 0.96rem;
-          line-height: 1.5;
-        }
-        .summary-list {
-          display: grid;
-          gap: 12px;
-        }
-        .summary-item {
-          padding: 14px 16px;
-          border-radius: 16px;
-          background: var(--panel-strong);
-          border: 1px solid var(--border);
-        }
-        .summary-item strong {
-          display: block;
-          margin-bottom: 4px;
-          font-size: 1rem;
-        }
-        .summary-item span {
-          color: var(--muted);
-          line-height: 1.5;
-          font-size: 0.95rem;
-        }
-        .day-chart {
-          height: 220px;
-          display: grid;
-          grid-template-columns: repeat(14, minmax(0, 1fr));
-          gap: 10px;
-          align-items: end;
-          margin-top: 10px;
-        }
-        .day-column {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-        }
-        .day-bar {
-          width: 100%;
-          height: 180px;
-          background: #efe7dd;
-          border: 1px solid var(--border);
-          border-radius: 14px;
-          display: flex;
-          align-items: flex-end;
-          overflow: hidden;
-        }
-        .day-bar-fill {
-          width: 100%;
-          background: linear-gradient(180deg, #5a868b 0%, var(--accent) 100%);
-          border-radius: 12px;
-        }
-        .day-label {
-          color: var(--muted);
-          font-size: 0.78rem;
-          font-variant-numeric: tabular-nums;
-        }
-        .trend-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 12px;
-          margin-top: 16px;
-        }
-        .trend-stat {
-          padding: 14px 16px;
-          border-radius: 16px;
-          background: var(--panel-strong);
-          border: 1px solid var(--border);
-        }
-        .trend-label {
-          color: var(--muted);
-          font-size: 0.84rem;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          margin-bottom: 8px;
-        }
-        .trend-value {
-          font-size: 1.25rem;
-          margin-bottom: 4px;
-        }
-        .trend-detail {
-          color: var(--muted);
-          font-size: 0.92rem;
-        }
-        table {
-          width: 100%;
-          border-collapse: collapse;
-        }
-        th, td {
-          text-align: left;
-          padding: 12px 10px;
-          border-bottom: 1px solid var(--border);
-          vertical-align: middle;
-        }
-        th {
-          color: var(--muted);
-          font-size: 0.82rem;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-        }
-        td {
-          font-size: 0.95rem;
-        }
-        tbody tr:last-child td {
-          border-bottom: none;
-        }
-        .number {
-          text-align: right;
-          font-variant-numeric: tabular-nums;
-        }
-        .progress {
-          position: relative;
-          min-width: 140px;
-          height: 10px;
-          border-radius: 999px;
-          background: #ebe2d7;
-          overflow: hidden;
-        }
-        .progress-fill {
-          height: 100%;
-          background: linear-gradient(90deg, #8db3b6 0%, var(--accent) 100%);
-          border-radius: 999px;
-        }
-        .notes {
-          display: grid;
-          gap: 10px;
-        }
-        .note {
-          padding: 12px 14px;
-          border-radius: 14px;
-          background: var(--panel-strong);
-          border: 1px solid var(--border);
-          color: var(--muted);
-        }
-        @media (max-width: 1080px) {
-          .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-          .provider-summary { grid-template-columns: 1fr; }
-          .two-up { grid-template-columns: 1fr; }
-        }
-        @media (max-width: 720px) {
-          .page { padding: 18px 14px 40px; }
-          .hero { padding: 20px; border-radius: 20px; }
-          .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .trend-grid { grid-template-columns: 1fr; }
-          th:nth-child(5), td:nth-child(5), th:nth-child(6), td:nth-child(6) { display: none; }
-        }
-        """,
-        "</style>",
+        f"<style>{_CSS}</style>",
         "</head>",
         "<body>",
         '<main class="page">',
-        '<section class="hero">',
-        '<div class="eyebrow">Local Multi-Provider Usage</div>',
-        "<h1>Extremely boring. Actually useful.</h1>",
-        "<p class=\"hero-copy\">"
-        f"Static HTML. No server. No build step. Each run overwrites <code>{escape(display_path(output_path))}</code> "
-        "with a fresh local dashboard for the providers that exposed trustworthy data on this machine."
-        "</p>",
-        '<div class="hero-meta">',
-        f'<div class="pill">Generated {escape(dashboard["generated_at"])}</div>',
-        f'<div class="pill">Providers {escape(provider_names)}</div>',
-        f'<div class="pill">Codex Mode {"All sessions" if dashboard["include_temp"] else "Non-temp only"}</div>',
-        f'<div class="pill">Snapshot {escape(dashboard["snapshot_path"])}</div>',
-        "</div>",
-        "</section>",
-        render_provider_summary(dashboard["providers"]),
+        render_hero(dashboard, output_path),
     ]
 
     if dashboard.get("openai") is not None:
-        parts.append(render_openai_section(dashboard["openai"]))
+        body_parts.append(render_openai_section(dashboard["openai"]))
     if dashboard.get("claude") is not None:
-        parts.append(render_claude_section(dashboard["claude"]))
-    if page_notes:
-        parts.append(page_notes)
+        body_parts.append(render_claude_section(dashboard["claude"]))
+    if page_notes_html:
+        body_parts.append(page_notes_html)
 
-    parts.extend(["</main>", "</body>", "</html>"])
-    return "\n".join(parts) + "\n"
+    body_parts.extend(["</main>", "</body>", "</html>"])
+    return "\n".join(body_parts) + "\n"
